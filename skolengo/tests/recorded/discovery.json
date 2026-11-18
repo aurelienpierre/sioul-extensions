@@ -1,0 +1,13 @@
+{
+ "issuer": "https://sso.monbureaunumerique.fr/oidc",
+ "authorization_endpoint": "https://sso.monbureaunumerique.fr/oidc/authorize",
+ "token_endpoint": "https://sso.monbureaunumerique.fr/oidc/token",
+ "scopes_supported": [
+  "openid",
+  "profile",
+  "email"
+ ],
+ "response_types_supported": [
+  "code"
+ ]
+}

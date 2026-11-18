@@ -1,0 +1,101 @@
+{
+ "data": [
+  {
+   "id": "S-2026-11-19",
+   "type": "agenda",
+   "attributes": {
+    "date": "2026-11-19"
+   },
+   "relationships": {
+    "lessons": {
+     "data": [
+      {
+       "id": "L-S1",
+       "type": "lesson"
+      }
+     ]
+    },
+    "homeworkAssignments": {
+     "data": []
+    }
+   }
+  }
+ ],
+ "included": [
+  {
+   "id": "L-S1",
+   "type": "lesson",
+   "attributes": {
+    "startDateTime": "2026-11-19T13:00:00Z",
+    "endDateTime": "2026-11-19T14:00:00Z",
+    "title": "ANGLAIS",
+    "location": "Labo 2",
+    "locationComplement": null,
+    "canceled": false,
+    "anyHomeworkToDoForTheLesson": false,
+    "anyHomeworkToDoAfterTheLesson": false,
+    "anyContent": false
+   },
+   "relationships": {
+    "subject": {
+     "data": {
+      "id": "SUBJ-Anglais",
+      "type": "subject"
+     }
+    },
+    "teachers": {
+     "data": [
+      {
+       "id": "T-2",
+       "type": "teacher"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "SUBJ-Mathématiques",
+   "type": "subject",
+   "attributes": {
+    "label": "Mathématiques",
+    "color": "#336699"
+   }
+  },
+  {
+   "id": "SUBJ-Histoire-géographie",
+   "type": "subject",
+   "attributes": {
+    "label": "Histoire-géographie",
+    "color": "#996633"
+   }
+  },
+  {
+   "id": "SUBJ-Anglais",
+   "type": "subject",
+   "attributes": {
+    "label": "Anglais",
+    "color": "#339966"
+   }
+  },
+  {
+   "id": "T-1",
+   "type": "teacher",
+   "attributes": {
+    "title": "M.",
+    "firstName": "Jean",
+    "lastName": "Exemple",
+    "photoUrl": null
+   }
+  },
+  {
+   "id": "T-2",
+   "type": "teacher",
+   "attributes": {
+    "title": "Mme",
+    "firstName": "Claire",
+    "lastName": "Fictive",
+    "photoUrl": null
+   }
+  }
+ ]
+}

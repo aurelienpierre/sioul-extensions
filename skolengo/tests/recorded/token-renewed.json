@@ -1,0 +1,6 @@
+{
+ "access_token": "AT-renewed-00000000000000",
+ "refresh_token": "RT-renewed-00000000000000",
+ "token_type": "bearer",
+ "expires_in": 86400
+}

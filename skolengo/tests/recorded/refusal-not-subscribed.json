@@ -1,0 +1,9 @@
+{
+ "errors": [
+  {
+   "status": "403",
+   "code": "SKO_APP_NOT_SUBSCRIBED",
+   "title": "The school has not subscribed"
+  }
+ ]
+}

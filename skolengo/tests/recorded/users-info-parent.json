@@ -1,0 +1,91 @@
+{
+ "data": {
+  "id": "ESKO-U-00000000-0000-4000-8000-0000000000aa",
+  "type": "legalRepresentativeUserInfo",
+  "attributes": {
+   "firstName": "Dominique",
+   "lastName": "Exemple",
+   "permissions": [
+    {
+     "schoolId": "SKO-E-00000000-0000-4000-8000-00000000000a",
+     "service": "CDT",
+     "permittedOperations": [
+      "READ_LESSONS"
+     ]
+    }
+   ]
+  },
+  "relationships": {
+   "school": {
+    "data": {
+     "id": "SKO-E-00000000-0000-4000-8000-00000000000a",
+     "type": "school"
+    }
+   },
+   "students": {
+    "data": [
+     {
+      "id": "ESKO-P-00000000-0000-4000-8000-000000000001",
+      "type": "student"
+     },
+     {
+      "id": "ESKO-P-00000000-0000-4000-8000-000000000002",
+      "type": "student"
+     }
+    ]
+   }
+  }
+ },
+ "included": [
+  {
+   "id": "ESKO-P-00000000-0000-4000-8000-000000000001",
+   "type": "student",
+   "attributes": {
+    "firstName": "Alex",
+    "lastName": "Exemple"
+   },
+   "relationships": {
+    "school": {
+     "data": {
+      "id": "SKO-E-00000000-0000-4000-8000-00000000000a",
+      "type": "school"
+     }
+    }
+   }
+  },
+  {
+   "id": "ESKO-P-00000000-0000-4000-8000-000000000002",
+   "type": "student",
+   "attributes": {
+    "firstName": "Sam",
+    "lastName": "Exemple"
+   },
+   "relationships": {
+    "school": {
+     "data": {
+      "id": "SKO-E-00000000-0000-4000-8000-00000000000b",
+      "type": "school"
+     }
+    }
+   }
+  },
+  {
+   "id": "SKO-E-00000000-0000-4000-8000-00000000000a",
+   "type": "school",
+   "attributes": {
+    "name": "Collège de l'Exemple",
+    "timeZone": "Europe/Paris",
+    "emsCode": "gdest"
+   }
+  },
+  {
+   "id": "SKO-E-00000000-0000-4000-8000-00000000000b",
+   "type": "school",
+   "attributes": {
+    "name": "Lycée Fictif",
+    "timeZone": "Europe/Paris",
+    "emsCode": "gdest"
+   }
+  }
+ ]
+}
