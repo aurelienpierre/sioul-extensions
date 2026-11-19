@@ -37,7 +37,16 @@ pub const PLATFORMS: [Platform; 19] = [
     Platform { code: "cgb", name: "Schulportal Ostbelgien", discovery: "https://sso.schulen.be/oidc/.well-known" },
 ];
 
+/// A platform invented for the tests on recorded answers, which name no real
+/// one (`tests/recorded.rs`); in the tests' builds alone, never in the file.
+#[cfg(test)]
+pub const EXAMPLE: Platform = Platform { code: "example", name: "Plateforme d'exemple", discovery: "https://sso.example.org/oidc/.well-known" };
+
 /// The platform of a code.
 pub fn by_code(code: &str) -> Option<&'static Platform> {
+    #[cfg(test)]
+    if code == EXAMPLE.code {
+        return Some(&EXAMPLE);
+    }
     PLATFORMS.iter().find(|p| p.code == code)
 }

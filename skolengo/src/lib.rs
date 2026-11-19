@@ -30,6 +30,9 @@
 
 mod jsonapi;
 pub mod platforms;
+#[cfg(test)]
+#[path = "../tests/recorded.rs"]
+mod recorded;
 
 use jiff::Timestamp;
 use jiff::civil::Date;

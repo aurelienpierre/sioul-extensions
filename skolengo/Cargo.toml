@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+# The recorded answers' tests run as the crate's own (`src/lib.rs`, `mod recorded`),
+# where an invented platform exists for them (`platforms::EXAMPLE`, tests only).
+autotests = false
 
 [lib]
 # The cdylib is the extension's file (wasm32-unknown-unknown); the rlib, its tests on a computer.

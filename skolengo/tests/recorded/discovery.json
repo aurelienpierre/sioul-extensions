@@ -1,7 +1,7 @@
 {
- "issuer": "https://sso.monbureaunumerique.fr/oidc",
- "authorization_endpoint": "https://sso.monbureaunumerique.fr/oidc/authorize",
- "token_endpoint": "https://sso.monbureaunumerique.fr/oidc/token",
+ "issuer": "https://sso.example.org/oidc",
+ "authorization_endpoint": "https://sso.example.org/oidc/authorize",
+ "token_endpoint": "https://sso.example.org/oidc/token",
  "scopes_supported": [
   "openid",
   "profile",

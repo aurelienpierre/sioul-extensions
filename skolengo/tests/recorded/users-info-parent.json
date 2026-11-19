@@ -75,7 +75,7 @@
    "attributes": {
     "name": "Collège de l'Exemple",
     "timeZone": "Europe/Paris",
-    "emsCode": "gdest"
+    "emsCode": "example"
    }
   },
   {
@@ -84,7 +84,7 @@
    "attributes": {
     "name": "Lycée Fictif",
     "timeZone": "Europe/Paris",
-    "emsCode": "gdest"
+    "emsCode": "example"
    }
   }
  ]

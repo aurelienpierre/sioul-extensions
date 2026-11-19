@@ -2,14 +2,16 @@
 
 //! The extension against recorded answers only, never a real platform: the
 //! answers in `tests/recorded/` are written from the field names the
-//! community clients read (TS `models/`, HA `api.py`), with invented people
-//! and schools. The stand-in host answers only the hosts the repository's
-//! manifest names, as Sioul does.
+//! community clients read (TS `models/`, HA `api.py`), with invented people,
+//! schools and platform (`platforms::EXAMPLE`, which exists in the tests'
+//! builds alone: this file is the crate's own `mod recorded`). The stand-in
+//! host answers only the hosts the repository's manifest names, and the
+//! invented platform's, as Sioul does.
 
 use serde_json::{Value, json};
 use sioul_extension::standin::StandIn;
 use sioul_extension::{Answer, Request, SignIn, run};
-use skolengo::{CLIENT_SECRET, RETURN, Skolengo};
+use crate::{CLIENT_SECRET, RETURN, Skolengo};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -64,10 +66,10 @@ fn web(platform: Platform) -> impl FnMut(&Request) -> Answer {
     move |request: &Request| {
         let url = request.url.as_str();
         let header = |name: &str| request.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone()).unwrap_or_default();
-        if url == "https://sso.monbureaunumerique.fr/oidc/.well-known" {
+        if url == "https://sso.example.org/oidc/.well-known" {
             return Answer::new(200, recorded("discovery.json"));
         }
-        if url == "https://sso.monbureaunumerique.fr/oidc/token" {
+        if url == "https://sso.example.org/oidc/token" {
             let body = request.body.clone().unwrap_or_default();
             assert!(body.contains(&format!("client_secret={CLIENT_SECRET}")), "{body}");
             if body.contains("grant_type=authorization_code") {
@@ -78,7 +80,7 @@ fn web(platform: Platform) -> impl FnMut(&Request) -> Answer {
             return Answer::new(platform.renewal.0, recorded(platform.renewal.1));
         }
         let api = url.strip_prefix("https://api.skolengo.com/api/v1/bff-sko-app").expect("only the gateway is asked");
-        assert_eq!(header("X-Skolengo-Ems-Code"), "gdest");
+        assert_eq!(header("X-Skolengo-Ems-Code"), "example");
         assert_eq!(header("X-Skolengo-Date-Format"), "utc");
         if *refused.borrow() > 0 {
             *refused.borrow_mut() -= 1;
@@ -111,6 +113,7 @@ fn web(platform: Platform) -> impl FnMut(&Request) -> Answer {
 fn stand_in(platform: Platform) -> StandIn {
     let mut host = StandIn::new(NOW);
     host.hosts = manifest_hosts();
+    host.hosts.push("sso.example.org".into());
     host.web = Box::new(web(platform));
     host
 }
@@ -123,8 +126,8 @@ fn call(host: &mut StandIn, text: Value) -> Value {
 fn signed_in(host: &mut StandIn, expires: i64) {
     host.secret = Some(
         json!({
-            "platform": "gdest",
-            "token_endpoint": "https://sso.monbureaunumerique.fr/oidc/token",
+            "platform": "example",
+            "token_endpoint": "https://sso.example.org/oidc/token",
             "refresh": "RT-kept-000000000000000",
             "sub": "ESKO-U-00000000-0000-4000-8000-0000000000aa",
             "access": "AT-kept-000000000000000",
@@ -141,25 +144,25 @@ fn the_sign_in_s_steps() {
     let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "lang": "fr", "choice": null }));
     let choices = reply["choose"].as_array().unwrap();
     assert_eq!(choices.len(), 19);
-    assert!(choices.iter().any(|c| c["id"] == "gdest" && c["name"] == "Mon Bureau Numérique"));
+    assert!(choices.iter().all(|c| c["id"].as_str().is_some_and(|i| !i.is_empty()) && c["name"].as_str().is_some_and(|n| !n.is_empty())));
     // Then the platform's page, and its return with the state the page was opened with.
     host.page = Some(Box::new(|open: &str| SignIn::Returned(format!("{RETURN}?code=OC-0000-recorded&state={}", param(open, "state")))));
-    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "lang": "fr", "choice": "gdest" }));
+    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "lang": "fr", "choice": "example" }));
     assert_eq!(reply, json!({ "signed_in": true }), "{:?}", host.log);
     let (open, watch) = &host.opened[0];
     assert_eq!(watch, RETURN);
-    assert!(open.starts_with("https://sso.monbureaunumerique.fr/oidc/authorize?response_type=code&client_id=SkoApp.Prod.0d349217"), "{open}");
+    assert!(open.starts_with("https://sso.example.org/oidc/authorize?response_type=code&client_id=SkoApp.Prod.0d349217"), "{open}");
     assert!(open.contains("redirect_uri=skoapp-prod%3A%2F%2Fsign-in-callback") && !open.contains("code_challenge"), "{open}");
     assert!(open.contains("scope=openid+profile+email&"), "the scopes the platform lists among HA's: {open}");
     // E1: a state that cannot be guessed (the review's scratch test), another at each sign-in.
     let state = param(open, "state");
     assert!(state.len() >= 22 && state != format!("sioul-{NOW}"), "a state that cannot be guessed: {state}");
     host.page = Some(Box::new(|_: &str| SignIn::Cancelled));
-    call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "gdest" }));
+    call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "example" }));
     let other = param(&host.opened[1].0, "state");
     assert!(other.len() >= 22 && other != state, "a second sign-in at the same second sends another state: {other}");
     let kept: Value = serde_json::from_str(host.secret.as_deref().unwrap()).unwrap();
-    assert_eq!((kept["platform"].as_str(), kept["refresh"].as_str(), kept["sub"].as_str()), (Some("gdest"), Some("RT-first-0000000000000000"), Some("ESKO-U-00000000-0000-4000-8000-0000000000aa")));
+    assert_eq!((kept["platform"].as_str(), kept["refresh"].as_str(), kept["sub"].as_str()), (Some("example"), Some("RT-first-0000000000000000"), Some("ESKO-U-00000000-0000-4000-8000-0000000000aa")));
     assert_eq!(kept["expires"], NOW + 86_400);
     for secret in ["OC-0000-recorded", "RT-first-0000000000000000", "AT-first-0000000000000000"] {
         assert!(!host.log_shows(secret), "{secret} in {:?}", host.log);
@@ -167,11 +170,11 @@ fn the_sign_in_s_steps() {
     // A return with another state, or none at all, keeps nothing new.
     let mut host = stand_in(Platform::default());
     host.sign_in = Some(SignIn::Returned(format!("{RETURN}?code=OC-0000-recorded&state=sioul-1")));
-    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "gdest" }));
+    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "example" }));
     assert_eq!(reply["problem"]["kind"], "sign-in");
     assert_eq!(host.secret, None);
     host.sign_in = Some(SignIn::Cancelled);
-    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "gdest" }));
+    let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "example" }));
     assert_eq!(reply, json!({ "cancelled": true }));
     assert_eq!(host.secret, None);
 }
@@ -305,15 +308,18 @@ fn every_request_goes_to_a_host_the_manifest_names() {
     signed_in(&mut host, NOW - 10);
     call(&mut host, json!({ "interface": 1, "call": "refresh", "lang": "en" }));
     host.sign_in = Some(SignIn::Returned(format!("{RETURN}?code=OC-0000-recorded&state=sioul-{NOW}")));
-    call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "gdest" }));
-    let hosts = manifest_hosts();
+    call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "example" }));
+    // The manifest's hosts, and the invented platform's (which only the tests know).
+    let mut hosts = manifest_hosts();
+    hosts.push("sso.example.org".into());
     assert!(!host.asked.is_empty());
     for request in &host.asked {
         let named = sioul_extension::url::https_host(&request.url).unwrap();
         assert!(hosts.contains(&named), "{named}");
     }
-    // And every platform's sign-in service is named there.
-    for platform in skolengo::platforms::PLATFORMS {
+    // And every real platform's sign-in service is named in the manifest.
+    let hosts = manifest_hosts();
+    for platform in crate::platforms::PLATFORMS {
         assert!(hosts.contains(&sioul_extension::url::https_host(platform.discovery).unwrap()), "{}", platform.code);
     }
 }
