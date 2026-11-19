@@ -203,7 +203,8 @@ fn tokens(host: &mut dyn Host, body: &Value) -> Result<(String, Option<String>, 
     let id = body["id_token"].as_str().filter(|t| !t.is_empty()).map(str::to_string);
     let hidden: Vec<&str> = [Some(access.as_str()), refresh.as_deref(), id.as_deref()].into_iter().flatten().collect();
     host.hide(&hidden);
-    let lasts = body["expires_in"].as_i64().or_else(|| body["expires_in"].as_str().and_then(|s| s.parse().ok())).unwrap_or(3600);
+    // Bounded (E4): a huge value would overflow `now + lasts`, a negative one renew at every refresh.
+    let lasts = body["expires_in"].as_i64().or_else(|| body["expires_in"].as_str().and_then(|s| s.parse().ok())).unwrap_or(3600).clamp(60, 86_400);
     Ok((access, refresh, id, lasts))
 }
 
@@ -356,7 +357,13 @@ impl Session<'_> {
         let mut reply = RefreshReply::default();
         for pupil in pupils {
             match self.agenda(&pupil, today, french) {
-                Ok(agenda) => reply.agendas.push(agenda),
+                // Two pupils whose ids differ by case or punctuation alone (E4): the second's agenda takes a hash of its own.
+                Ok(mut agenda) => {
+                    if reply.agendas.iter().any(|a| a.id == agenda.id) {
+                        agenda.id = hashed_id(&agenda.id, &pupil.id);
+                    }
+                    reply.agendas.push(agenda);
+                }
                 Err(fault) => {
                     self.host.log(&format!("a pupil's agenda: {}", fault.detail()));
                     // The end of the sign-in ends everything; another fault leaves the other pupils' agendas.
@@ -500,7 +507,9 @@ fn day_period(day: Date, zone: &TimeZone) -> Option<Period> {
     Some(Period::between(from, until))
 }
 
-/// An agenda's id from a pupil's: lower case, `-` for anything else, 48 at most (a hash ends a longer one).
+/// An agenda's id from a pupil's: lower case, `-` for anything else, 48 at
+/// most; a hash ends a longer one, and makes one of a pupil's id without a
+/// letter or a digit (never an id beginning with `-`, which Sioul refuses: E4).
 fn agenda_id(pupil: &str) -> String {
     let mut id: String = pupil.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     while id.contains("--") {
@@ -510,8 +519,14 @@ fn agenda_id(pupil: &str) -> String {
     if !id.is_empty() && id.len() <= 48 {
         return id;
     }
+    hashed_id(&id, pupil)
+}
+
+/// `id` cut to 39 characters, then a hash of the pupil's own id: `pupil-<hash>` when nothing is left.
+fn hashed_id(id: &str, pupil: &str) -> String {
     let hash = pupil.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
-    format!("{}-{hash:08x}", &id[..id.len().min(39)].trim_end_matches('-'))
+    let head = id[..id.len().min(39)].trim_matches('-');
+    format!("{}-{hash:08x}", if head.is_empty() { "pupil" } else { head })
 }
 
 /// A time of the gateway: RFC 3339, or a civil time without zone, read as UTC (HA `timetable.py:21-28`).
@@ -564,6 +579,11 @@ mod tests {
         let long = agenda_id(&"X".repeat(80));
         assert!(long.len() <= 48 && long.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{long}");
         assert_ne!(agenda_id(&format!("{}A", "X".repeat(80))), long);
+        // E4: no letter, no digit; two ids alike but for case or punctuation.
+        let bare = agenda_id("--__--");
+        assert!(bare.starts_with("pupil-") && !bare.ends_with('-'), "{bare}");
+        assert_eq!(agenda_id("P-1"), agenda_id("p_1"));
+        assert_ne!(hashed_id(&agenda_id("p_1"), "p_1"), agenda_id("P-1"));
         assert_eq!(instant("2026-11-19T08:00:00Z"), Some(1_795_075_200));
         assert_eq!(instant("2026-11-19T09:00:00+01:00"), Some(1_795_075_200));
         assert_eq!(instant("2026-11-19T08:00:00"), Some(1_795_075_200), "no zone: UTC");
