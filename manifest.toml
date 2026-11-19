@@ -1,0 +1,42 @@
+# Sioul's extensions: the list Sioul reads (docs/extensions.md in Sioul's
+# repository). Signed by hand, detached, into manifest.toml.sig (README.md,
+# "Making a release"); Sioul refuses it unsigned, or signed by another key.
+format = 1
+# Grows by one with each manifest signed: Sioul refuses a lower one than the
+# last it accepted, so that an older manifest cannot be served again.
+serial = 1
+
+[[extension]]
+id = "skolengo"
+version = "0.1.0"
+interface = 1
+name = { en = "Skolengo timetable (unofficial)", fr = "Emploi du temps Skolengo (non officiel)" }
+about = { en = "Each pupil's lessons, from a week back to four weeks ahead, from a school platform built on Skolengo (Mon Bureau Numérique and the others it lists): one read-only agenda per pupil. Not the vendor's: a port of community clients.", fr = "Les cours de chaque élève, d’une semaine en arrière à quatre semaines en avant, depuis un ENT bâti sur Skolengo (Mon Bureau Numérique et les autres qu’elle liste) : un agenda en lecture seule par élève. Pas celle de l’éditeur : un portage de clients communautaires." }
+brings = ["agenda"]
+hosts = [
+    "api.skolengo.com",
+    "sso.monbureaunumerique.fr",
+    "sso.mon-ent-occitanie.fr",
+    "sso.arsene76.fr",
+    "sso.ent27.fr",
+    "sso.entcreuse.fr",
+    "sso.ent.auvergnerhonealpes.fr",
+    "sso.agora06.fr",
+    "sso.cybercolleges42.fr",
+    "sso.ecollege.haute-garonne.fr",
+    "sso.moncollege.valdoise.fr",
+    "sso.webcollege.seinesaintdenis.fr",
+    "sso.eclat-bfc.fr",
+    "sso.aucollege84.vaucluse.fr",
+    "sso.moncollege.valdemarne.fr",
+    "sso.skolengo.com",
+    "sso.pdl.kosmoseducation.com",
+    "sso1.skolengo.com",
+    "sso2.skolengo.com",
+    "sso.schulen.be",
+]
+sign_in = "skoapp-prod://sign-in-callback"
+# Written at each release from the automation's build (README.md); this hash is
+# that of tools/build.sh with Rust 1.99.0 at the commit that tags skolengo-0.1.0.
+file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/skolengo-0.1.0/skolengo-0.1.0.wasm"
+sha256 = "a2dbd29c27218953d4c6b439a13cf285d68e644272ad1c544e620fab74cc1d43"

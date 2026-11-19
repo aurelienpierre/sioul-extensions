@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds an extension's file from the sources at a tag `<id>-<version>`
+# (skolengo-0.1.0), with a fixed Rust, runs the tests on recorded answers
+# first, attaches the file and its SHA-256 to the release of that tag, and
+# prints the hash in the log. It signs nothing and needs no secret of its
+# own (the repository's own token, to attach the files): the manifest is
+# signed by hand, on a computer, never here (README.md, "Making a release").
+name: Build an extension
+
+on:
+  push:
+    tags: ["*-[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      id:
+        description: "The extension to build (its id), without attaching anything"
+        required: true
+        default: skolengo
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      # The Rust the hashes hold for: change it on purpose only (the manifest's hashes change with it).
+      RUST: "1.99.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust ${{ env.RUST }}, with the WebAssembly target
+        run: |
+          rustup toolchain install "$RUST" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST"
+      - name: Which extension
+        id: which
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+            id="${tag%-*}"
+            version="${tag##*-}"
+            found=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$id/Cargo.toml" | head -n 1)
+            if [ "$found" != "$version" ]; then
+              echo "The tag says $id $version, $id/Cargo.toml says $found." >&2
+              exit 1
+            fi
+          else
+            id="${{ github.event.inputs.id }}"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - name: Tests on recorded answers
+        run: cargo test --locked
+      - name: Build its file
+        run: tools/build.sh "${{ steps.which.outputs.id }}" | tee build.txt
+      - name: Attach it to the release of its tag
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Built by this repository's automation from the tag's sources; nothing here is signed."
+            echo "The manifest names this file's SHA-256 once the publisher has checked it and signed the manifest by hand."
+            echo
+            echo '```'
+            cat build.txt
+            echo '```'
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" out/*.wasm out/SHA256SUMS --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
