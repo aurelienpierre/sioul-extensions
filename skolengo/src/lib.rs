@@ -432,7 +432,10 @@ impl Session<'_> {
         };
         let calendar = Calendar { product: PRODUCT.into(), name: name.clone(), events }.text();
         let unread = unread.into_iter().filter_map(|day| day_period(day, &pupil.zone)).collect();
-        Ok(Agenda { id: agenda_id(&pupil.id), name, calendar, unread })
+        // The days asked, first to last, in the pupil's school's zone: Sioul removes a lesson of
+        // them it no longer finds, the unread days aside.
+        let period = day_period(first, &pupil.zone).zip(day_period(last, &pupil.zone)).map(|(first, last)| Period { from: first.from, until: last.until });
+        Ok(Agenda { id: agenda_id(&pupil.id), name, calendar, period, unread })
     }
 
     /// One request of `/agendas` from `start` to `end` (TS `index.ts:557-587`;

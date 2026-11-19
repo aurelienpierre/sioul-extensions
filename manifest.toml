@@ -40,4 +40,4 @@ sign_in = "skoapp-prod://sign-in-callback"
 # automation's is the same (README.md); this hash is that of tools/build.sh with
 # Rust 1.99.0 at the commit that tags skolengo-0.1.0.
 file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/skolengo-0.1.0/skolengo-0.1.0.wasm"
-sha256 = "7fce9efb146376d3d4607fa7e32c0808bd188e06749195332bfbbdb59e5519e3"
+sha256 = "0145940e902dcd5d1191a38191b11faf1c60afbbd5c36a680a1a1f6da1eec3fe"

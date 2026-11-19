@@ -234,7 +234,7 @@ impl SignInReply {
     }
 }
 
-/// A period the extension could not read: what Sioul had there stays.
+/// A period: the one an agenda read, or one it could not read (what Sioul had there stays).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Period {
     /// RFC 3339, UTC (`2026-11-20T00:00:00Z`).
@@ -249,14 +249,24 @@ impl Period {
     }
 }
 
-/// An agenda handed back: Sioul keeps it read only, replaced whole at each refresh.
+/// An agenda handed back. Sioul writes its events into a calendar of the
+/// person's own, each marked as this extension's: one not yet there is
+/// added, one changed written again, and one of `period` that the agenda no
+/// longer holds removed, except on the `unread` days.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Agenda {
     /// Lower-case letters, digits and `-`, 48 at most; stable.
     pub id: String,
     pub name: String,
-    /// iCalendar text, events only ([`ical::Calendar::text`]).
+    /// iCalendar text, events only ([`ical::Calendar::text`]): each with a
+    /// UID of its own, the same at every refresh; no category (Sioul adds
+    /// the extension's name).
     pub calendar: String,
+    /// The period this answer read, its unread days aside: what Sioul holds
+    /// of this agenda there and no longer finds in it is removed. None:
+    /// nothing is removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<Period>,
     pub unread: Vec<Period>,
 }
 
@@ -382,7 +392,7 @@ mod tests {
 
         fn refresh(host: &mut dyn Host, _: &Call) -> RefreshReply {
             let now = host.now();
-            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), unread: vec![Period::between(now, now + 86_400)] }], problem: None }
+            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), period: Some(Period::between(now - 86_400, now + 86_400)), unread: vec![Period::between(now, now + 86_400)] }], problem: None }
         }
     }
 
@@ -395,6 +405,7 @@ mod tests {
         assert_eq!(reply, json!({ "signed_in": true }));
         let reply: Value = serde_json::from_str(&run::<Echo>(&mut host, br#"{"interface":1,"call":"refresh","lang":"en"}"#)).unwrap();
         assert_eq!(reply["agendas"][0]["unread"][0], json!({ "from": "2026-11-19T00:00:00Z", "until": "2026-11-20T00:00:00Z" }));
+        assert_eq!(reply["agendas"][0]["period"], json!({ "from": "2026-11-18T00:00:00Z", "until": "2026-11-20T00:00:00Z" }));
         assert_eq!(reply["problem"], Value::Null);
         for wrong in [&br#"{"interface":2,"call":"refresh"}"#[..], br#"{"interface":1,"call":"dance"}"#, b"not json"] {
             let reply: Value = serde_json::from_str(&run::<Echo>(&mut host, wrong)).unwrap();

@@ -214,6 +214,8 @@ fn a_lesson_is_an_event_and_a_cancelled_one_cancelled() {
     }
     let history = event("L-A2");
     assert!(history.contains("STATUS:CANCELLED\r\n") && history.contains("SUMMARY:Histoire-géographie\r\n"), "{history}");
+    // No category of its own: Sioul adds the extension's name, and its other marks.
+    assert!(!alex.contains("CATEGORIES"), "{alex}");
     assert!(event("L-A4").contains("DESCRIPTION:M. Jean Exemple\r\n") && !event("L-A4").contains("LOCATION:"));
     // The same answers make the same bytes: nothing to write on the next refresh.
     let again = call(&mut host, json!({ "interface": 1, "call": "refresh", "lang": "en" }));
@@ -229,6 +231,9 @@ fn a_day_answering_500_keeps_what_it_had() {
     let alex = &reply["agendas"][0];
     // 20 November alone, in Paris's day: what Sioul had there stays.
     assert_eq!(alex["unread"], json!([{ "from": "2026-11-19T23:00:00Z", "until": "2026-11-20T23:00:00Z" }]));
+    // The days asked, a week back and four ahead, in Paris's days: Sioul removes a lesson of them
+    // it no longer finds, the unread day aside.
+    assert_eq!(alex["period"], json!({ "from": "2026-11-10T23:00:00Z", "until": "2026-12-16T23:00:00Z" }));
     let calendar = alex["calendar"].as_str().unwrap();
     assert!(calendar.contains("UID:L-A1@skolengo") && calendar.contains("UID:L-A4@skolengo") && !calendar.contains("UID:L-A3@skolengo"));
     assert!(host.log.iter().any(|l| l.contains("500 for 2026-11-20 alone")), "{:?}", host.log);
