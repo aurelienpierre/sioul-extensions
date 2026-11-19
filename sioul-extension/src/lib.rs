@@ -10,8 +10,8 @@
 //!   [`Extension::refresh`]) and their replies ([`SignInReply`],
 //!   [`RefreshReply`], an [`Agenda`], a [`Problem`]);
 //! - **what an extension may ask** Sioul, through a [`Host`]: a web request
-//!   ([`Request`], [`Answer`]), its own secret, a sign-in, the time, a line
-//!   in its log, values to hide from that log;
+//!   ([`Request`], [`Answer`]), its own secret, a sign-in, the time, random
+//!   bytes, a line in its log, values to hide from that log;
 //! - **an iCalendar writer** ([`ical`]) for the agenda it hands back;
 //! - **the plumbing**: JSON through the module's memory ([`export!`] makes the
 //!   three exports Sioul runs), on `wasm32` only. On a computer the same code
@@ -139,6 +139,10 @@ pub trait Host {
     fn sign_in(&mut self, open: &str, watch: &str) -> Result<SignIn, Refused>;
     /// The time now, in seconds since 1970 (UTC).
     fn now(&mut self) -> i64;
+    /// `bytes` random bytes (1 to 64) from Sioul's system, in URL-safe
+    /// base64 without padding: a sign-in's `state`, a PKCE verifier. A
+    /// module built for `wasm32-unknown-unknown` has no randomness of its own.
+    fn random(&mut self, bytes: usize) -> Result<String, Refused>;
     /// A line in the extension's own log, kept on the device.
     fn log(&mut self, line: &str);
     /// Values that must never reach the log (a token, a code).
@@ -355,6 +359,11 @@ pub mod forms {
     pub fn now_answer(answer: &Value) -> i64 {
         answer["unix"].as_i64().unwrap_or(0)
     }
+
+    pub fn random_answer(answer: &Value) -> Result<String, Refused> {
+        refusal(answer)?;
+        answer["random"].as_str().filter(|r| !r.is_empty()).map(str::to_string).ok_or_else(|| Refused("form".into()))
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +409,8 @@ mod tests {
         assert_eq!(forms::web_answer(&json!({ "refused": "host" })), Err(Refused("host".into())));
         assert_eq!(forms::sign_in_answer(&json!({ "cancelled": true })), Ok(SignIn::Cancelled));
         assert_eq!(forms::secret_answer(&json!({ "secret": null })), Ok(None));
+        assert_eq!(forms::random_answer(&json!({ "random": "AbC_-9" })).as_deref(), Ok("AbC_-9"));
+        assert_eq!(forms::random_answer(&json!({ "refused": "form" })), Err(Refused("form".into())));
         let form = Request::post_form("https://example.org/token", &[("grant_type", "refresh_token"), ("refresh_token", "RT-a b&c")]);
         assert_eq!(form.body.as_deref(), Some("grant_type=refresh_token&refresh_token=RT-a+b%26c"));
     }

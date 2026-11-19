@@ -225,7 +225,9 @@ fn sign_in_at(host: &mut dyn Host, platform: &platforms::Platform) -> Result<Sig
     if !scopes.contains(&"openid") {
         scopes = vec!["openid"];
     }
-    let state = format!("sioul-{}", host.now());
+    // What ties the address returned to this sign-in: 256 random bits, never the time (E1).
+    // Neither community client this is ported from sends PKCE: none is sent here either.
+    let state = host.random(32)?;
     let scope = scopes.join(" ");
     let open = url::with_query(authorize, &[("response_type", "code"), ("client_id", CLIENT_ID), ("redirect_uri", RETURN), ("scope", &scope), ("state", &state)]);
     let returned = match host.sign_in(&open, RETURN)? {

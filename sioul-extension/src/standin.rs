@@ -2,7 +2,8 @@
 
 //! A stand-in for Sioul, on a computer, for tests on recorded answers: the
 //! web answered by a function the test gives, the secret kept in memory, the
-//! sign-in answered as the test says, the time fixed. Every ask crosses the
+//! sign-in answered as the test says (or as a function of the page opened),
+//! the time fixed, random bytes never the same twice (not random: a test's). Every ask crosses the
 //! same JSON as on `wasm32` ([`crate::forms`]), and the web's limits that an
 //! extension can meet are checked as Sioul checks them: `https`, the hosts
 //! named, no redirect followed.
@@ -21,8 +22,12 @@ pub struct StandIn {
     /// Every request made, in order.
     pub asked: Vec<Request>,
     pub secret: Option<String>,
-    /// What the person does on the sign-in page; none: no sign-in may be asked.
+    /// What the person does on the sign-in page; none: `page` says, or no sign-in may be asked.
     pub sign_in: Option<SignIn>,
+    /// What the person does on the page opened, given its address (a return that carries its `state`).
+    pub page: Option<Box<dyn FnMut(&str) -> SignIn>>,
+    /// Random bytes drawn so far: each draw differs.
+    pub drawn: u64,
     /// Each sign-in asked: the page opened and the address watched for.
     pub opened: Vec<(String, String)>,
     pub log: Vec<String>,
@@ -32,7 +37,7 @@ pub struct StandIn {
 impl StandIn {
     /// A stand-in at `now`, whose web answers nothing (status 0 would not read: every request is refused).
     pub fn new(now: i64) -> Self {
-        Self { now, hosts: Vec::new(), web: Box::new(|_| Answer::new(599, "")), asked: Vec::new(), secret: None, sign_in: None, opened: Vec::new(), log: Vec::new(), hidden: Vec::new() }
+        Self { now, hosts: Vec::new(), web: Box::new(|_| Answer::new(599, "")), asked: Vec::new(), secret: None, sign_in: None, page: None, drawn: 0, opened: Vec::new(), log: Vec::new(), hidden: Vec::new() }
     }
 
     /// Whether a value the extension hid shows in the log.
@@ -87,7 +92,8 @@ impl Host for StandIn {
 
     fn sign_in(&mut self, open: &str, watch: &str) -> Result<SignIn, Refused> {
         self.opened.push((open.to_string(), watch.to_string()));
-        let answer: Value = match self.sign_in.take() {
+        let act = self.sign_in.take().or_else(|| self.page.as_mut().map(|page| page(open)));
+        let answer: Value = match act {
             None => json!({ "refused": "not-now" }),
             Some(SignIn::Cancelled) => json!({ "cancelled": true }),
             Some(SignIn::Returned(address)) if address.starts_with(watch) => json!({ "returned": address }),
@@ -98,6 +104,23 @@ impl Host for StandIn {
 
     fn now(&mut self) -> i64 {
         forms::now_answer(&json!({ "unix": self.now }))
+    }
+
+    fn random(&mut self, bytes: usize) -> Result<String, Refused> {
+        if !(1..=64).contains(&bytes) {
+            return forms::random_answer(&json!({ "refused": "form" }));
+        }
+        // Splitmix64 from a counter: different each draw, the same from one run to the next.
+        let mut out = Vec::with_capacity(bytes);
+        while out.len() < bytes {
+            self.drawn += 1;
+            let mut z = self.drawn.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            out.extend_from_slice(&(z ^ (z >> 31)).to_le_bytes());
+        }
+        out.truncate(bytes);
+        forms::random_answer(&json!({ "random": crate::url::base64url_encode(&out) }))
     }
 
     fn log(&mut self, line: &str) {

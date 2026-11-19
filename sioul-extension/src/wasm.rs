@@ -14,6 +14,7 @@ unsafe extern "C" {
     fn now(ptr: i32, len: i32) -> i32;
     fn log(ptr: i32, len: i32) -> i32;
     fn hide(ptr: i32, len: i32) -> i32;
+    fn random(ptr: i32, len: i32) -> i32;
     fn web(ptr: i32, len: i32) -> i32;
     fn secret(ptr: i32, len: i32) -> i32;
     fn sign_in(ptr: i32, len: i32) -> i32;
@@ -60,6 +61,10 @@ impl Host for Sioul {
 
     fn now(&mut self) -> i64 {
         forms::now_answer(&ask(now, &json!({})))
+    }
+
+    fn random(&mut self, bytes: usize) -> Result<String, Refused> {
+        forms::random_answer(&ask(random, &json!({ "bytes": bytes })))
     }
 
     fn log(&mut self, line: &str) {

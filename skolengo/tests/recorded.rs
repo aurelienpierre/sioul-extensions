@@ -142,15 +142,22 @@ fn the_sign_in_s_steps() {
     let choices = reply["choose"].as_array().unwrap();
     assert_eq!(choices.len(), 19);
     assert!(choices.iter().any(|c| c["id"] == "gdest" && c["name"] == "Mon Bureau Numérique"));
-    // Then the platform's page, and its return.
-    host.sign_in = Some(SignIn::Returned(format!("{RETURN}?code=OC-0000-recorded&state=sioul-{NOW}")));
+    // Then the platform's page, and its return with the state the page was opened with.
+    host.page = Some(Box::new(|open: &str| SignIn::Returned(format!("{RETURN}?code=OC-0000-recorded&state={}", param(open, "state")))));
     let reply = call(&mut host, json!({ "interface": 1, "call": "sign-in", "lang": "fr", "choice": "gdest" }));
     assert_eq!(reply, json!({ "signed_in": true }), "{:?}", host.log);
     let (open, watch) = &host.opened[0];
     assert_eq!(watch, RETURN);
     assert!(open.starts_with("https://sso.monbureaunumerique.fr/oidc/authorize?response_type=code&client_id=SkoApp.Prod.0d349217"), "{open}");
-    assert!(open.contains("redirect_uri=skoapp-prod%3A%2F%2Fsign-in-callback") && open.contains(&format!("state=sioul-{NOW}")), "{open}");
+    assert!(open.contains("redirect_uri=skoapp-prod%3A%2F%2Fsign-in-callback") && !open.contains("code_challenge"), "{open}");
     assert!(open.contains("scope=openid+profile+email&"), "the scopes the platform lists among HA's: {open}");
+    // E1: a state that cannot be guessed (the review's scratch test), another at each sign-in.
+    let state = param(open, "state");
+    assert!(state.len() >= 22 && state != format!("sioul-{NOW}"), "a state that cannot be guessed: {state}");
+    host.page = Some(Box::new(|_: &str| SignIn::Cancelled));
+    call(&mut host, json!({ "interface": 1, "call": "sign-in", "choice": "gdest" }));
+    let other = param(&host.opened[1].0, "state");
+    assert!(other.len() >= 22 && other != state, "a second sign-in at the same second sends another state: {other}");
     let kept: Value = serde_json::from_str(host.secret.as_deref().unwrap()).unwrap();
     assert_eq!((kept["platform"].as_str(), kept["refresh"].as_str(), kept["sub"].as_str()), (Some("gdest"), Some("RT-first-0000000000000000"), Some("ESKO-U-00000000-0000-4000-8000-0000000000aa")));
     assert_eq!(kept["expires"], NOW + 86_400);

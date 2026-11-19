@@ -73,6 +73,19 @@ pub fn https_host(address: &str) -> Option<String> {
     Some(authority.to_ascii_lowercase())
 }
 
+/// Bytes in base64url (RFC 4648 §5), without padding.
+pub fn base64url_encode(bytes: &[u8]) -> String {
+    const LETTERS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..=chunk.len() {
+            out.push(char::from(LETTERS[((n >> (18 - 6 * i)) & 63) as usize]));
+        }
+    }
+    out
+}
+
 /// Base64url (RFC 4648 §5), with or without padding, decoded; none when it is not.
 pub fn base64url(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);
@@ -115,5 +128,10 @@ mod tests {
         assert_eq!(https_host("http://example.org/"), None);
         assert_eq!(base64url("eyJzdWIiOiJhYmMifQ").as_deref(), Some(&br#"{"sub":"abc"}"#[..]));
         assert_eq!(base64url("e$"), None);
+        for bytes in [&b""[..], b"f", b"fo", b"foo", b"foob", &[0xfb, 0xff, 0xfe]] {
+            assert_eq!(base64url(&base64url_encode(bytes)).as_deref(), Some(bytes));
+        }
+        assert_eq!(base64url_encode(&[0xfb, 0xff, 0xfe]), "-__-");
+        assert_eq!(base64url_encode(b"foob"), "Zm9vYg");
     }
 }
