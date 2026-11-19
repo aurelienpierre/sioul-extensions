@@ -71,21 +71,22 @@ impl Host for Sioul {
     }
 }
 
-/// `sioul_alloc`: `len` bytes for Sioul to write a call into, kept until the call takes them.
+/// `sioul_alloc`: `len` bytes for Sioul to write a call into (one at least),
+/// kept until the call takes them back; a boxed slice, so that its length is
+/// its allocation's.
 pub fn alloc(len: i32) -> i32 {
     let len = usize::try_from(len).unwrap_or(0).max(1);
-    let mut buffer = Vec::<u8>::with_capacity(len);
-    let ptr = buffer.as_mut_ptr();
-    std::mem::forget(buffer);
-    ptr as i32
+    Box::into_raw(vec![0u8; len].into_boxed_slice()) as *mut u8 as i32
 }
 
 /// `sioul_call`: the call at `ptr` run, its reply given, its buffer freed.
 pub fn call<E: Extension>(ptr: i32, len: i32) -> i32 {
     let len = usize::try_from(len).unwrap_or(0);
-    // SAFETY: `ptr` came from `alloc` with a capacity of at least `max(len, 1)`, and Sioul wrote `len` bytes there.
-    let call = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len.max(1)) };
-    let said = crate::run::<E>(&mut Sioul, &call);
+    // SAFETY: `ptr` came from `alloc` for this length (one byte when it was 0),
+    // and Sioul wrote `len` bytes there; it is taken back once.
+    let buffer = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr as *mut u8, len.max(1))) };
+    let said = crate::run::<E>(&mut Sioul, &buffer[..len]);
+    drop(buffer);
     // SAFETY: the pointer and length name `said`, alive for the call.
     unsafe { reply(said.as_ptr() as i32, said.len() as i32) };
     0
