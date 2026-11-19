@@ -52,7 +52,7 @@ Nothing is signed by the automation, and it holds no key. Each step below is don
 5. **Sign the manifest by hand**, on your computer, with the security key that holds the publisher's key plugged in:
 
    ```sh
-   gpg --local-user '2EF12D28F49E347CAD7E6BF31549D8B45963166A!' --digest-algo SHA512 --detach-sign --output manifest.toml.sig manifest.toml
+   gpg --no-textmode --local-user '2EF12D28F49E347CAD7E6BF31549D8B45963166A!' --digest-algo SHA512 --detach-sign --output manifest.toml.sig manifest.toml
    ```
 
    The `!` makes GnuPG sign with that primary key itself rather than a signing subkey: Sioul holds that key's packet alone and checks that the signature's issuer is it, that it is a signature of a binary document, and that it holds over the manifest's exact bytes. Do not change `manifest.toml` after signing it, not even a line ending.
