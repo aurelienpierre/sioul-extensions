@@ -4,8 +4,15 @@
 # (skolengo-0.1.0), with a fixed Rust, runs the tests on recorded answers
 # first, attaches the file and its SHA-256 to the release of that tag, and
 # prints the hash in the log. It signs nothing and needs no secret of its
-# own (the repository's own token, to attach the files): the manifest is
-# signed by hand, on a computer, never here (README.md, "Making a release").
+# own: the manifest is signed by hand, on a computer, never here (README.md,
+# "Making a release").
+#
+# Two jobs, so that the code of the dependencies (their build scripts, their
+# macros) never runs beside a token that can write: `build` tests and builds
+# with a token that only reads, kept out of the checkout; `attach` runs no
+# code of the repository and only attaches the files `build` made. Each
+# action is pinned to a commit. What a person types or a tag says reaches
+# the shell as a variable, never pasted into the script.
 name: Build an extension
 
 on:
@@ -18,18 +25,23 @@ on:
         required: true
         default: skolengo
 
-permissions:
-  contents: write
+# Nothing by default: each job says what its token may do.
+permissions: {}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     env:
       # The Rust the hashes hold for: change it on purpose only (the manifest's hashes change with it).
       RUST: "1.99.0"
+      ASKED: ${{ github.event.inputs.id }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Rust ${{ env.RUST }}, with the WebAssembly target
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Rust, with the WebAssembly target
         run: |
           rustup toolchain install "$RUST" --profile minimal --target wasm32-unknown-unknown
           rustup default "$RUST"
@@ -37,33 +49,62 @@ jobs:
         id: which
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag="$GITHUB_REF_NAME"
-            id="${tag%-*}"
-            version="${tag##*-}"
+            id="${GITHUB_REF_NAME%-*}"
+            version="${GITHUB_REF_NAME##*-}"
+          else
+            id="$ASKED"
+          fi
+          # An id as the manifest allows one; nothing else reaches a path or a command.
+          case "$id" in
+            "" | -* | *- | *[!a-z0-9-]*)
+              echo "Not an extension's id: $id" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
             found=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$id/Cargo.toml" | head -n 1)
             if [ "$found" != "$version" ]; then
               echo "The tag says $id $version, $id/Cargo.toml says $found." >&2
               exit 1
             fi
-          else
-            id="${{ github.event.inputs.id }}"
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
       - name: Tests on recorded answers
         run: cargo test --locked
       - name: Build its file
-        run: tools/build.sh "${{ steps.which.outputs.id }}" | tee build.txt
-      - name: Attach it to the release of its tag
-        if: github.ref_type == 'tag'
         env:
-          GH_TOKEN: ${{ github.token }}
+          ID: ${{ steps.which.outputs.id }}
+        run: |
+          mkdir -p out
+          tools/build.sh "$ID" | tee out/build.txt
+      - name: Keep the files for the next job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: built
+          path: out/
+          if-no-files-found: error
+
+  attach:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      # The release's files; and this run's files, to read them.
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: The files the build made
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name built --dir out
+      - name: Attach them to the release of its tag
         run: |
           {
             echo "Built by this repository's automation from the tag's sources; nothing here is signed."
-            echo "The manifest names this file's SHA-256 once the publisher has checked it and signed the manifest by hand."
+            echo "The manifest names this file's SHA-256 once the publisher has built the same tag, found the same hash, and signed the manifest by hand."
             echo
             echo '```'
-            cat build.txt
+            cat out/build.txt
             echo '```'
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" out/*.wasm out/SHA256SUMS --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" out/*.wasm out/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
