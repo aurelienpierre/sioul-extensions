@@ -11,7 +11,7 @@ id = "skolengo"
 version = "0.1.0"
 interface = 1
 name = { en = "Skolengo timetable (unofficial)", fr = "Emploi du temps Skolengo (non officiel)" }
-about = { en = "Each pupil's lessons, from a week back to four weeks ahead, from a school platform built on Skolengo (Mon Bureau Numérique and the others it lists): one read-only agenda per pupil. Not the vendor's: a port of community clients.", fr = "Les cours de chaque élève, d’une semaine en arrière à quatre semaines en avant, depuis un ENT bâti sur Skolengo (Mon Bureau Numérique et les autres qu’elle liste) : un agenda en lecture seule par élève. Pas celle de l’éditeur : un portage de clients communautaires." }
+about = { en = "Each pupil's lessons, from a week back to four weeks ahead, from a school platform built on Skolengo (any of those it lists): one read-only agenda per pupil. Not the vendor's: a port of community clients.", fr = "Les cours de chaque élève, d’une semaine en arrière à quatre semaines en avant, depuis un ENT bâti sur Skolengo (l’un de ceux qu’elle liste) : un agenda en lecture seule par élève. Pas celle de l’éditeur : un portage de clients communautaires." }
 brings = ["agenda"]
 hosts = [
     "api.skolengo.com",

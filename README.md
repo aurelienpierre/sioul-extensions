@@ -7,7 +7,7 @@ An extension brings data into [Sioul](https://github.com/aurelienpierre/sioul) f
 | Folder | What it is |
 |---|---|
 | `sioul-extension/` | The library every extension uses: the messages of Sioul's interface, their way through the module's memory, the web request, the secret, the sign-in, an iCalendar writer, and a stand-in of Sioul for tests on a computer. |
-| `skolengo/` | **Skolengo timetable**: each pupil's lessons from a school platform built on Skolengo (Mon Bureau Numérique and the others its table lists), one read-only agenda per pupil, from a week back to four weeks ahead. |
+| `skolengo/` | **Skolengo timetable**: each pupil's lessons from a school platform built on Skolengo (any of those its table lists, `skolengo/src/platforms.rs`), one read-only agenda per pupil, from a week back to four weeks ahead. |
 | `manifest.toml` | What Sioul offers: each extension, what it brings, the hosts it talks to, whether it signs in, its file and that file's SHA-256. Signed by hand into `manifest.toml.sig`. |
 | `tools/build.sh` | Builds each extension's file reproducibly and prints its SHA-256. |
 | `.github/workflows/release.yml` | Builds an extension's file from its tag's sources and attaches it to that release. It signs nothing. |
@@ -29,7 +29,7 @@ The Skolengo extension is a port to Rust of what these free software projects do
 | [ha-skolengo](https://github.com/infernalK/ha-skolengo) | infernalK | MIT | `20dd40f` | the scopes asked, the code's exchange and the renewal (the new refresh token kept), the pupils of a parent's account, fifteen days a request, a range answering 500 halved until the bad day is alone, the flattening of JSON:API documents |
 | [jskolengo](https://github.com/vinceh121/jskolengo) | vinceh121 | GPL-3.0 | `b0f86e2` | consulted for the same constants |
 
-Because it is a work based on GPL code, this repository is under the **GNU General Public License, version 3 or later** (`LICENSE`), as Sioul is. ha-skolengo's MIT code may be included in it; its notice: "Copyright (c) 2026 infernalK", under the MIT licence.
+Because it is a work based on GPL code, this repository is under the **GNU General Public License, version 3 or later** (`LICENSE`), as Sioul is. ha-skolengo's MIT code may be included in it; its copyright notice and the MIT licence's permission notice are in `LICENSES/ha-skolengo-MIT.txt`, as that licence asks.
 
 ## Building and testing
 
@@ -56,6 +56,8 @@ Nothing is signed by the automation, and it holds no key. Each step below is don
    ```
 
    The `!` makes GnuPG sign with that primary key itself rather than a signing subkey: Sioul holds that key's packet alone and checks that the signature's issuer is it, that it is a signature of a binary document, and that it holds over the manifest's exact bytes. Do not change `manifest.toml` after signing it, not even a line ending.
+
+   **At each signing**, even of a manifest that changes nothing but its serial, check again that every file it names is still the one its `sha256` names: download each from its release and compare (`sha256sum`). A release's files can be replaced on GitHub unless its release immutability is on; Sioul then refuses the replaced file, and no one can install that extension until it is put back.
 6. **Publish**: commit `manifest.toml` and `manifest.toml.sig` together and push them to `main`. Sioul reads them from `https://raw.githubusercontent.com/aurelienpierre/sioul-extensions/main/manifest.toml` (and `.sig` beside it) when its Extensions page opens, and once a day while an extension is enabled.
 
 Before the repository is public, Sioul can read a manifest from a folder of your computer instead (`[extensions] manifest = "/path/to/manifest.toml"` in Sioul's configuration), its signature checked all the same; a file named by a relative `file` is then read beside it.
