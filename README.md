@@ -2,6 +2,8 @@
 
 > **Unofficial.** The extensions here are not made, endorsed or supported by the vendors of the services they talk to, nor by any school or school platform. They talk to those services as their community clients do, and may stop working whenever a service changes.
 
+Why this is lawful — the right to study and interoperate with software you use, which terms of use cannot waive — is set out under European Union and French law in [`LEGAL.md`](LEGAL.md).
+
 An extension brings data into [Sioul](https://github.com/aurelienpierre/sioul) from a service Sioul does not speak to itself. Each is a small Rust program compiled to one WebAssembly file, the same on every system; Sioul runs it in a sandbox of its own, gives it only what this repository's signed manifest declares for it (the hosts it may reach, whether it keeps a sign-in), and takes back one kind of data: a read-only agenda. The interface is written down in Sioul's repository, `docs/extensions.md` (version 1).
 
 | Folder | What it is |
@@ -9,6 +11,7 @@ An extension brings data into [Sioul](https://github.com/aurelienpierre/sioul) f
 | `sioul-extension/` | The library every extension uses: the messages of Sioul's interface, their way through the module's memory, the web request, the secret, the sign-in, an iCalendar writer, and a stand-in of Sioul for tests on a computer. |
 | `skolengo/` | **Skolengo timetable**: each pupil's lessons from a school platform built on Skolengo (any of those its table lists, `skolengo/src/platforms.rs`), one read-only agenda per pupil, from a week back to four weeks ahead. |
 | `manifest.toml` | What Sioul offers: each extension, what it brings, the hosts it talks to, whether it signs in, its file and that file's SHA-256. Signed by hand into `manifest.toml.sig`. |
+| `LEGAL.md` | The legal basis under EU and French law for independent, read-only interoperability clients. |
 | `tools/build.sh` | Builds each extension's file reproducibly and prints its SHA-256. |
 | `.github/workflows/release.yml` | Builds an extension's file from its tag's sources and attaches it to that release. It signs nothing. |
 
