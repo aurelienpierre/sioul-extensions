@@ -1,0 +1,85 @@
+[
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/SQinvented0000000000001",
+      "fields": {
+        "s": { "stringValue": "2026-11-20 09:00" },
+        "st": { "integerValue": "540" },
+        "d": { "integerValue": "60" },
+        "se": { "stringValue": "serviceinvented00000000000002" },
+        "p": { "integerValue": "6000" },
+        "cu": { "mapValue": { "fields": {
+          "id": { "stringValue": "clientinvented0000000000002a" },
+          "name": { "stringValue": "Client Annulé" }
+        } } },
+        "ca": { "stringValue": "-Cinvented0000000000" },
+        "sca": { "stringValue": "-Cinvented0000000000" },
+        "cby": { "stringValue": "pro" },
+        "dat": { "timestampValue": "2026-11-19T18:00:00Z" },
+        "dby": { "stringValue": "pro" },
+        "cat": { "integerValue": "1763500000000" },
+        "uat": { "integerValue": "1763600000000" },
+        "eventTimestamp": { "timestampValue": "2026-11-20T08:00:00Z" }
+      },
+      "createTime": "2026-11-18T12:00:00.000000Z",
+      "updateTime": "2026-11-19T18:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/SQinvented0000000000002",
+      "fields": {
+        "s": { "stringValue": "2026-11-25 14:30" },
+        "st": { "integerValue": "870" },
+        "d": { "integerValue": "30" },
+        "se": { "stringValue": "serviceinvented00000000000001" },
+        "p": { "integerValue": "4500" },
+        "cu": { "mapValue": { "fields": {
+          "id": { "stringValue": "clientinvented0000000000001a" },
+          "name": { "stringValue": "Marie Exemple" },
+          "email": { "stringValue": "marie@example.org" },
+          "phone": { "stringValue": "+33123456789" }
+        } } },
+        "ca": { "stringValue": "-Cinvented0000000000" },
+        "sca": { "stringValue": "-Cinvented0000000000" },
+        "cby": { "stringValue": "website" },
+        "fo": { "stringValue": "app-ios" },
+        "t": { "stringValue": "Coupe et brushing" },
+        "cat": { "integerValue": "1763700000000" },
+        "uat": { "integerValue": "1763700000000" },
+        "eventTimestamp": { "timestampValue": "2026-11-25T13:30:00Z" }
+      },
+      "createTime": "2026-11-20T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/SQinvented0000000000003",
+      "fields": {
+        "s": { "stringValue": "2026-12-24 00:00" },
+        "st": { "integerValue": "0" },
+        "d": { "integerValue": "1439" },
+        "ad": { "booleanValue": true },
+        "cu": { "mapValue": { "fields": {
+          "d": { "booleanValue": true }
+        } } },
+        "ca": { "stringValue": "-Cinvented0000000000" },
+        "sca": { "stringValue": "-Cinvented0000000000" },
+        "cby": { "stringValue": "pro" },
+        "t": { "stringValue": "Congés" },
+        "cat": { "integerValue": "1763750000000" },
+        "uat": { "integerValue": "1763750000000" },
+        "eventTimestamp": { "timestampValue": "2026-12-23T23:00:00Z" }
+      },
+      "createTime": "2026-11-21T15:00:00.000000Z",
+      "updateTime": "2026-11-21T15:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  }
+]

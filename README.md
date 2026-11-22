@@ -10,6 +10,7 @@ An extension brings data into [Sioul](https://github.com/aurelienpierre/sioul) f
 |---|---|
 | `sioul-extension/` | The library every extension uses: the messages of Sioul's interface, their way through the module's memory, the web request, the secret, the sign-in, an iCalendar writer, and a stand-in of Sioul for tests on a computer. |
 | `skolengo/` | **Skolengo timetable**: each pupil's lessons from a school platform built on Skolengo (any of those its table lists, `skolengo/src/platforms.rs`), one read-only agenda per pupil, from a week back to four weeks ahead. |
+| `planity/` | **Planity appointments**: a Planity Pro salon's appointments, one read-only agenda of busy time, from sixty days back to a hundred and twenty ahead. |
 | `manifest.toml` | What Sioul offers: each extension, what it brings, the hosts it talks to, whether it signs in, its file and that file's SHA-256. Signed by hand into `manifest.toml.sig`. |
 | `LEGAL.md` | The legal basis under EU and French law for independent, read-only interoperability clients. |
 | `tools/build.sh` | Builds each extension's file reproducibly and prints its SHA-256. |
@@ -33,6 +34,13 @@ The Skolengo extension is a port to Rust of what these free software projects do
 | [jskolengo](https://github.com/vinceh121/jskolengo) | vinceh121 | GPL-3.0 | `b0f86e2` | consulted for the same constants |
 
 Because it is a work based on GPL code, this repository is under the **GNU General Public License, version 3 or later** (`LICENSE`), as Sioul is. ha-skolengo's MIT code may be included in it; its copyright notice and the MIT licence's permission notice are in `LICENSES/ha-skolengo-MIT.txt`, as that licence asks.
+
+## Planity appointments
+
+- **The sign-in is the salon's email and password.** Planity Pro is a Firebase web application; it signs in with an email and a password, not an OAuth redirect. Sioul collects the two in a calm form of its own (the extension only names the fields it needs), does Firebase's own sign-in dance to a Pro-claimed token, and keeps in your device's keyring only the resulting refresh token and the salon's business id — never the password, neither in Sioul nor in the extension. The Firebase API key in the source is public (embedded in Planity's own web application).
+- **What it reads**: the salon's appointment documents (`vevents`) over the Firestore REST API, for a window from sixty days back to a hundred and twenty ahead, paged past Firestore's page size. It reads nothing else; the rest of the salon's data is permission-denied to it.
+- **What it brings**: each appointment as one event of **busy** time — a client appointment titled by the client's name, a block or closure as "Unavailable"/« Indisponible », an all-day block as a whole-day event, a cancelled appointment as a cancelled event; the duration, the price, the phone and the note in the description. One read-only agenda per salon calendar, into a calendar you choose.
+- **Tested against recorded answers only**, written from the request and response shapes, with an invented business, an invented client and fake tokens (`planity/tests/recorded/`). It has never been run against the live service by its authors; the coordinator validates that separately.
 
 ## Building and testing
 

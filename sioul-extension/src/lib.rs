@@ -64,6 +64,11 @@ impl Request {
         Self { method: "POST", url: url.into(), headers: vec![("Content-Type".into(), "application/x-www-form-urlencoded".into())], body: Some(url::form(pairs)) }
     }
 
+    /// A JSON body posted (`application/json`).
+    pub fn post_json(url: impl Into<String>, body: &Value) -> Self {
+        Self { method: "POST", url: url.into(), headers: vec![("Content-Type".into(), "application/json".into())], body: Some(body.to_string()) }
+    }
+
     pub fn header(mut self, name: &str, value: &str) -> Self {
         self.headers.push((name.to_string(), value.to_string()));
         self
