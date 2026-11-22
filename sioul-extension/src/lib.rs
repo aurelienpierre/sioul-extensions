@@ -170,6 +170,13 @@ pub struct Call {
     /// On a `sign-in` call: the id the person chose among those offered.
     #[serde(default)]
     pub choice: Option<String>,
+    /// On a `sign-in` call for a credentials extension: the fields the person
+    /// typed into Sioul's own form, by their fixed kind (login-core-design.md).
+    /// Sioul hides every value from the log and keeps none once the call ends;
+    /// the extension keeps only what it chooses through [`Host::keep_secret`]
+    /// (a refresh token), never the password.
+    #[serde(default)]
+    pub credentials: Option<Credentials>,
 }
 
 impl Call {
@@ -177,6 +184,24 @@ impl Call {
     pub fn french(&self) -> bool {
         self.lang == "fr"
     }
+}
+
+/// The credential values a `sign-in` call may carry, each under its fixed
+/// kind (login-core-design.md's closed set: `email`, `username`, `password`,
+/// `server`, `one-time-code`). Only the kinds the signed manifest declares
+/// are ever filled.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+pub struct Credentials {
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default, rename = "one-time-code")]
+    pub one_time_code: Option<String>,
 }
 
 /// One thing the person may choose before a sign-in (a platform, a school).
@@ -268,6 +293,13 @@ pub struct Agenda {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub period: Option<Period>,
     pub unread: Vec<Period>,
+    /// The extension's suggestion that these are the current user's **own**
+    /// busy time (so the door may write `TRANSP:OPAQUE`), not another
+    /// person's (busy-core-design.md). It is a default for the person's
+    /// per-agenda choice, never the final word: the door writes the
+    /// transparency from that choice. Planity's appointments: true; a child's
+    /// Skolengo lessons: false.
+    pub busy: bool,
 }
 
 /// The reply to a `refresh` call: the agendas, and a problem if there was one.
@@ -392,7 +424,7 @@ mod tests {
 
         fn refresh(host: &mut dyn Host, _: &Call) -> RefreshReply {
             let now = host.now();
-            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), period: Some(Period::between(now - 86_400, now + 86_400)), unread: vec![Period::between(now, now + 86_400)] }], problem: None }
+            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), period: Some(Period::between(now - 86_400, now + 86_400)), unread: vec![Period::between(now, now + 86_400)], busy: false }], problem: None }
         }
     }
 
@@ -406,6 +438,7 @@ mod tests {
         let reply: Value = serde_json::from_str(&run::<Echo>(&mut host, br#"{"interface":1,"call":"refresh","lang":"en"}"#)).unwrap();
         assert_eq!(reply["agendas"][0]["unread"][0], json!({ "from": "2026-11-19T00:00:00Z", "until": "2026-11-20T00:00:00Z" }));
         assert_eq!(reply["agendas"][0]["period"], json!({ "from": "2026-11-18T00:00:00Z", "until": "2026-11-20T00:00:00Z" }));
+        assert_eq!(reply["agendas"][0]["busy"], json!(false), "the agenda carries its busy suggestion");
         assert_eq!(reply["problem"], Value::Null);
         for wrong in [&br#"{"interface":2,"call":"refresh"}"#[..], br#"{"interface":1,"call":"dance"}"#, b"not json"] {
             let reply: Value = serde_json::from_str(&run::<Echo>(&mut host, wrong)).unwrap();
@@ -424,5 +457,19 @@ mod tests {
         assert_eq!(forms::random_answer(&json!({ "refused": "form" })), Err(Refused("form".into())));
         let form = Request::post_form("https://example.org/token", &[("grant_type", "refresh_token"), ("refresh_token", "RT-a b&c")]);
         assert_eq!(form.body.as_deref(), Some("grant_type=refresh_token&refresh_token=RT-a+b%26c"));
+    }
+
+    #[test]
+    fn a_call_may_carry_credentials() {
+        // A credentials sign-in call carries the fields by their fixed kind; a
+        // call without them reads None (login-core-design.md).
+        let call: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in","lang":"fr","choice":null,"credentials":{"email":"a@b.org","password":"pw"}}"#).unwrap();
+        let credentials = call.credentials.expect("credentials");
+        assert_eq!((credentials.email.as_deref(), credentials.password.as_deref()), (Some("a@b.org"), Some("pw")));
+        assert_eq!((credentials.username, credentials.one_time_code), (None, None));
+        let bare: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in"}"#).unwrap();
+        assert_eq!(bare.credentials, None);
+        let coded: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in","credentials":{"one-time-code":"123456"}}"#).unwrap();
+        assert_eq!(coded.credentials.unwrap().one_time_code.as_deref(), Some("123456"));
     }
 }

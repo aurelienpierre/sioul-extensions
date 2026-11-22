@@ -435,7 +435,8 @@ impl Session<'_> {
         // The days asked, first to last, in the pupil's school's zone: Sioul removes a lesson of
         // them it no longer finds, the unread days aside.
         let period = day_period(first, &pupil.zone).zip(day_period(last, &pupil.zone)).map(|(first, last)| Period { from: first.from, until: last.until });
-        Ok(Agenda { id: agenda_id(&pupil.id), name, calendar, period, unread })
+        // A pupil's lessons are the child's own time, not the reader's: not busy by default.
+        Ok(Agenda { id: agenda_id(&pupil.id), name, calendar, period, unread, busy: false })
     }
 
     /// One request of `/agendas` from `start` to `end` (TS `index.ts:557-587`;
@@ -572,6 +573,7 @@ fn event(lesson: &Value) -> Option<Event> {
         cancelled: lesson["canceled"] == true,
         // A pupil's lesson is not the time of the person who reads it (a parent).
         transparent: true,
+        all_day: false,
     })
 }
 
