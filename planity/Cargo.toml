@@ -1,6 +1,6 @@
 [package]
 name = "planity"
-description = "A Planity Pro salon agenda as a read-only iCalendar agenda, for Sioul: unofficial, not the vendor's."
+description = "A Planity Pro salon agenda as a read-only iCalendar agenda, and the clients of its appointments as contacts, for Sioul: unofficial, not the vendor's."
 version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true

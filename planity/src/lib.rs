@@ -22,6 +22,11 @@
 //! bookings still come, and nothing is removed (no `period`): degraded, never
 //! destructive.
 //!
+//! The clients seen in the documents read come back too, as one set of
+//! contacts ([`clients`]), which Sioul writes into an address book the person
+//! chooses, only ever adding to it; when Firestore did not answer, the reply
+//! holds no contacts (the feed holds no client).
+//!
 //! The data model and the request/response shapes are validated from a
 //! consented live capture, written down in the publisher's design notes
 //! (`api.md`, `extension-spec.md`, `merge-design.md`). No real account,
@@ -29,6 +34,7 @@
 //! Firebase API key and the Planity hostnames are the only real strings, both
 //! public.
 
+mod clients;
 mod feed;
 mod merge;
 mod planityapi;
@@ -153,8 +159,10 @@ fn keep(host: &mut dyn Host, kept: &Kept) -> Result<(), Fault> {
 // ---------------------------------------------------------------- the refresh
 
 /// Reads both sources, then one event per booking: one busy agenda per
-/// calendar. The period read goes with the agendas only when both answered;
-/// a sign-in that ended, on either side, is said with what still came.
+/// calendar, and the clients of the documents read as one set of contacts
+/// when Firestore answered. The period read goes with the agendas only when
+/// both answered; a sign-in that ended, on either side, is said with what
+/// still came.
 fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
     if let Some(r) = kept.r.clone() {
         host.hide(&[&r]);
@@ -207,6 +215,18 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
         (Err(fault), _) | (_, Err(fault)) => said(fault),
         _ => None,
     };
+    // The clients, from the documents read, whatever became of their appointments; none
+    // when Firestore did not answer: the feed holds no client.
+    let contacts = match &appointments {
+        Ok(appointments) => {
+            let (set, lines) = clients::set(appointments);
+            for line in &lines {
+                host.log(&format!("refresh: {line}"));
+            }
+            vec![set]
+        }
+        Err(_) => Vec::new(),
+    };
     let appointments = appointments.unwrap_or_default();
     let feed = feed.ok();
 
@@ -238,7 +258,7 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
             Agenda { id: agenda_id(&id), name, calendar: text, period: period.clone(), unread: Vec::new(), busy: true }
         })
         .collect();
-    RefreshReply { agendas, problem, ..RefreshReply::default() }
+    RefreshReply { agendas, contacts, problem }
 }
 
 /// Mints a fresh id token (keeping a rotated refresh token) and reads the

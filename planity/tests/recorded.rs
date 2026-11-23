@@ -27,11 +27,16 @@
 //! - 12: an all-day block, Firestore alone;
 //! - 13: a cancelled (`dat`) booking, Firestore alone;
 //! - 14, 15: a `DAILY;INTERVAL=7` and a `WEEKLY;INTERVAL=2` series, each cancelled as a whole.
+//!
+//! Their clients: "Marie Exemple" (`clientinvented0000000000001a`) in 01, 02, 03, 04, 06 and 11;
+//! "Paul Exemple" (`clientinvented0000000000002b`) in 05 and 13; the block 12 has none. The
+//! contacts' tests add documents of their own (31 onwards, clients `Cinvented…`).
 
 use crate::Planity;
 use serde_json::{Value, json};
 use sioul_extension::standin::StandIn;
 use sioul_extension::{Answer, Request, run};
+use std::collections::BTreeSet;
 
 /// 2026-11-22T10:00:00Z.
 const NOW: i64 = 1_795_341_600;
@@ -670,7 +675,253 @@ fn every_request_goes_to_a_host_the_manifest_names_and_the_manifest_asks_three_f
         assert!(hosts.contains(&named.to_string()), "{named} missing from the manifest");
     }
     assert_eq!(manifest_list("credentials"), vec!["email", "password", "web-address"]);
+    assert_eq!(manifest_list("brings"), vec!["agenda", "contacts"], "the manifest says it brings what the reply carries");
     let entry = manifest_entry();
     assert!(entry.contains(&format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))), "the manifest names this version: {entry}");
     assert!(entry.contains(&format!("planity-{0}/planity-{0}.wasm", env!("CARGO_PKG_VERSION"))), "{entry}");
+}
+
+// ---------------------------------------------------------------- the clients, as contacts
+
+const MARIE_ID: &str = "clientinvented0000000000001a";
+const PAUL_ID: &str = "clientinvented0000000000002b";
+
+/// An invented client id, 28 characters as Planity's.
+fn client(n: u32) -> String {
+    format!("Cinvented{n:019}")
+}
+
+/// Plain JSON as a Firestore typed value.
+fn typed(value: &Value) -> Value {
+    match value {
+        Value::String(text) => json!({ "stringValue": text }),
+        Value::Bool(flag) => json!({ "booleanValue": flag }),
+        Value::Number(number) => json!({ "integerValue": number.to_string() }),
+        Value::Object(map) => json!({ "mapValue": { "fields": map.iter().map(|(k, v)| (k.clone(), typed(v))).collect::<serde_json::Map<_, _>>() } }),
+        _ => json!({ "nullValue": null }),
+    }
+}
+
+/// A `vevents` document of the invented salon (`v(n)`): its start, its `uat`, its client (`cu`,
+/// plain JSON), cancelled (`dat`) or not.
+fn document(n: u32, start: &str, updated: i64, client: Option<Value>, cancelled: bool) -> Value {
+    let mut fields = json!({ "s": { "stringValue": start }, "d": { "integerValue": "30" }, "ca": { "stringValue": "-Cinvented0000000000" }, "uat": { "integerValue": updated.to_string() } });
+    if let Some(client) = client {
+        fields["cu"] = typed(&client);
+    }
+    if cancelled {
+        fields["dat"] = json!({ "timestampValue": "2026-11-21T18:00:00Z" });
+    }
+    json!({ "name": format!("projects/planity-production/databases/(default)/documents/businesses/{BUSINESS}/vevents/{}", v(n)), "fields": fields })
+}
+
+/// The recorded documents and `more`, refreshed with both sources answering.
+fn refreshed_with(more: Vec<Value>) -> (Value, StandIn) {
+    let mut documents = recorded_documents();
+    documents.extend(more);
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    signed_in(&mut host);
+    let reply = refresh(&mut host, "en");
+    assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
+    within_sioul_bounds(&reply);
+    (reply, host)
+}
+
+/// The one person of the reply's set with this id.
+fn person<'a>(reply: &'a Value, id: &str) -> &'a Value {
+    reply["contacts"][0]["people"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap_or_else(|| panic!("{id} in {}", reply["contacts"]))
+}
+
+/// A mark that turns a line around, which Sioul takes out of a text.
+fn direction(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// The reply's contacts within every bound Sioul counts before writing any
+/// (its `reply::contact_sets`): past one, the whole reply would be refused.
+fn within_sioul_bounds(reply: &Value) {
+    let Some(sets) = reply.get("contacts") else { return };
+    let sets = sets.as_array().unwrap();
+    assert!(sets.len() <= 8, "8 sets a reply");
+    let text = |value: &Value, most: usize, lines: bool| {
+        let text = value.as_str().unwrap_or_else(|| panic!("a text: {value}"));
+        assert!(text.chars().count() <= most, "{} characters, {most} at most", text.chars().count());
+        assert_eq!(text, text.trim(), "trimmed");
+        assert!(!text.chars().any(|c| (c.is_control() && !(lines && c == '\n')) || direction(c)), "cleaned: {text:?}");
+    };
+    for set in sets {
+        let id = set["id"].as_str().unwrap();
+        assert!(!id.is_empty() && id.len() <= 48 && !id.starts_with('-') && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "{id}");
+        text(&set["name"], 256, false);
+        let people = set["people"].as_array().unwrap();
+        assert!(people.len() <= 20_000, "20 000 people a set");
+        let mut ids = BTreeSet::new();
+        for person in people {
+            for key in person.as_object().unwrap().keys() {
+                assert!(["id", "name", "given", "family", "phones", "emails", "org", "note"].contains(&key.as_str()), "{key} is not the core's");
+            }
+            assert!(ids.insert(person["id"].as_str().unwrap().to_string()), "a person handed twice");
+            for key in ["id", "name"] {
+                text(&person[key], 256, false);
+                assert!(!person[key].as_str().unwrap().is_empty(), "{key} required");
+            }
+            for key in ["given", "family", "org"] {
+                if let Some(value) = person.get(key) {
+                    text(value, 256, false);
+                }
+            }
+            if let Some(note) = person.get("note") {
+                text(note, 2_000, true);
+            }
+            for key in ["phones", "emails"] {
+                if let Some(all) = person.get(key) {
+                    let all = all.as_array().unwrap();
+                    assert!(all.len() <= 8, "8 {key} a person");
+                    all.iter().for_each(|one| text(one, 256, false));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_clients_of_the_appointments_come_back_as_one_set_one_person_each() {
+    let (reply, mut host) = refreshed_with(Vec::new());
+    // Marie in six documents (01, 02, 03, 04, 06 cancelled, 11), Paul in two (05, 13 cancelled):
+    // one person each; the block 12 is nobody. Given and family names never guessed.
+    assert_eq!(
+        reply["contacts"],
+        json!([{
+            "id": "clients",
+            "name": "Clients",
+            "people": [
+                { "id": MARIE_ID, "name": MARIE, "phones": ["+33123456789"], "emails": ["marie@example.org"] },
+                { "id": PAUL_ID, "name": "Paul Exemple" }
+            ]
+        }])
+    );
+    // The same word in French, the same people.
+    let french = refresh(&mut host, "fr");
+    assert_eq!(french["contacts"], reply["contacts"]);
+    // The log counts them, never names them.
+    assert!(host.log.iter().any(|l| l == "refresh: 2 client(s) handed back as contacts"), "{:?}", host.log);
+    for private in [MARIE, "Paul Exemple", "marie@example.org", "+33123456789", MARIE_ID] {
+        assert!(!host.log_shows(private), "{private} in the log {:?}", host.log);
+    }
+}
+
+#[test]
+fn the_latest_appointment_names_the_client_and_every_number_is_kept_latest_first() {
+    let jeanne = client(31);
+    let (reply, _) = refreshed_with(vec![
+        document(31, "2026-11-03 10:00", 1_795_000_000_000, Some(json!({ "id": jeanne, "name": "Jeanne Exemple", "phone": "+33 1 00 00 00 01", "email": "Jeanne@Example.org" })), false),
+        document(32, "2026-11-10 10:00", 1_795_200_000_000, Some(json!({ "id": jeanne, "name": "Jeanne Exemple-Martin", "phone": "+33100000002", "email": "jeanne@example.org" })), false),
+        // Later in the agenda, but updated before 32: it does not name the client.
+        document(33, "2026-11-30 10:00", 1_795_100_000_000, Some(json!({ "id": jeanne, "name": "J. Exemple", "phone": "+33100000001", "email": "jeanne.martin@example.org" })), false),
+    ]);
+    let jeanne = person(&reply, &jeanne);
+    assert_eq!(jeanne["name"], "Jeanne Exemple-Martin", "the name of the appointment updated last, as written");
+    // Two numbers, the latest first; 31's number is 33's in another spelling, kept once in its latest.
+    assert_eq!(jeanne["phones"], json!(["+33100000002", "+33100000001"]));
+    // An address seen in two cases is one address.
+    assert_eq!(jeanne["emails"], json!(["jeanne@example.org", "jeanne.martin@example.org"]));
+    assert_eq!((jeanne.get("given"), jeanne.get("family")), (None, None), "one string is never split");
+}
+
+#[test]
+fn a_block_and_a_nameless_client_give_nobody_and_a_cancelled_appointments_client_counts() {
+    let (reply, host) = refreshed_with(vec![
+        // A client with no name anywhere, a name without an id, a block without any client.
+        document(34, "2026-11-04 10:00", 1_795_000_000_000, Some(json!({ "id": client(34), "phone": "+33100000034" })), false),
+        document(35, "2026-11-05 10:00", 1_795_000_000_000, Some(json!({ "name": "Sans Identifiant" })), false),
+        document(36, "2026-11-06 10:00", 1_795_000_000_000, None, false),
+        document(37, "2026-11-07 10:00", 1_795_000_000_000, Some(json!({ "d": true })), false),
+        // A cancelled appointment's client is still a client.
+        document(38, "2026-11-08 10:00", 1_795_000_000_000, Some(json!({ "id": client(38), "name": "Lucie Exemple", "email": "lucie@example.org" })), true),
+        // Named on an older appointment only: that name, and the newer one's number.
+        document(39, "2026-11-09 10:00", 1_795_000_000_000, Some(json!({ "id": client(39), "name": "Hugo Exemple" })), false),
+        document(40, "2026-11-12 10:00", 1_795_300_000_000, Some(json!({ "id": client(39), "phone": "+33100000039" })), false),
+    ]);
+    let people = reply["contacts"][0]["people"].as_array().unwrap();
+    let ids: Vec<&str> = people.iter().map(|p| p["id"].as_str().unwrap()).collect();
+    assert_eq!(ids.len(), 4, "Marie, Paul, Lucie, Hugo: {ids:?}");
+    assert!(!ids.contains(&client(34).as_str()) && !people.iter().any(|p| p["name"] == "Sans Identifiant"), "{ids:?}");
+    assert_eq!(*person(&reply, &client(38)), json!({ "id": client(38), "name": "Lucie Exemple", "emails": ["lucie@example.org"] }));
+    assert_eq!(*person(&reply, &client(39)), json!({ "id": client(39), "name": "Hugo Exemple", "phones": ["+33100000039"] }));
+    assert!(host.log.iter().any(|l| l == "refresh: 1 client(s) without a name or a usable id left out"), "{:?}", host.log);
+}
+
+#[test]
+fn without_firestores_answer_the_reply_carries_no_contacts() {
+    let no_contacts = |host: &mut StandIn, what: &str| {
+        let reply = refresh(host, "en");
+        assert!(reply["agendas"].as_array().is_some_and(|a| !a.is_empty()) || reply["problem"].is_object(), "{what}: {reply}");
+        assert_eq!(reply.get("contacts"), None, "{what}: no key at all");
+    };
+    // No Firebase session: the feed alone, which holds no client.
+    let mut host = stand_in(Scenario::default());
+    host.secret = Some(json!({ "b": BUSINESS, "l": link() }).to_string());
+    no_contacts(&mut host, "no session");
+    // A session refused, Firestore refusing, Firestore unreachable: the feed alone too.
+    for scenario in [Scenario { expired_refresh: true, ..Scenario::default() }, Scenario { firestore_status: Some(403), ..Scenario::default() }, Scenario { firestore_status: Some(503), ..Scenario::default() }] {
+        let mut host = stand_in(scenario);
+        signed_in(&mut host);
+        no_contacts(&mut host, "Firestore not read");
+    }
+    // Both failing: nothing at all.
+    let mut host = stand_in(Scenario { firestore_status: Some(503), feed: (500, String::new()), ..Scenario::default() });
+    signed_in(&mut host);
+    no_contacts(&mut host, "both failing");
+    // The feed failing, Firestore answering: the clients still come.
+    let mut host = stand_in(Scenario { feed: (500, String::new()), ..Scenario::default() });
+    signed_in(&mut host);
+    let reply = refresh(&mut host, "en");
+    assert_eq!(reply["contacts"][0]["people"].as_array().map(Vec::len), Some(2), "{reply}");
+    // Firestore answering with no client at all: the set, empty, so that its address book can be chosen.
+    let mut host = stand_in(Scenario { documents: Vec::new(), ..Scenario::default() });
+    signed_in(&mut host);
+    assert_eq!(refresh(&mut host, "en")["contacts"], json!([{ "id": "clients", "name": "Clients", "people": [] }]));
+}
+
+#[test]
+fn the_contacts_stay_within_sioul_s_bounds_a_long_text_cut_never_the_reply_refused() {
+    let long = format!("Marie \u{202E}{}\u{0007}", "é".repeat(300));
+    let documents = (0..10u32)
+        .map(|i| {
+            let email = match i {
+                0 => format!("{}@example.org", "m".repeat(300)),
+                9 => "marie.longue@example.org".to_string(),
+                _ => String::new(),
+            };
+            let mut cu = json!({ "id": client(41), "name": long, "phone": format!("+3310000{i:04}") });
+            if !email.is_empty() {
+                cu["email"] = json!(email);
+            }
+            document(41 + i, &format!("2026-11-{:02} 09:00", 10 + i), 1_795_000_000_000 + i64::from(i) * 1000, Some(cu), false)
+        })
+        .collect();
+    let (reply, _) = refreshed_with(documents);
+    let marie = person(&reply, &client(41));
+    let name = marie["name"].as_str().unwrap();
+    assert!(name.starts_with("Marie é") && name.chars().count() == 256, "cut to 256 characters, cleaned: {}", name.chars().count());
+    // Ten numbers: the eight latest; an address too long is left out, never cut into another.
+    let phones: Vec<String> = (2..10).rev().map(|i| format!("+3310000{i:04}")).collect();
+    assert_eq!(marie["phones"], json!(phones));
+    assert_eq!(marie["emails"], json!(["marie.longue@example.org"]));
+}
+
+#[test]
+fn one_clients_json_is_the_shape_sioul_reads() {
+    let only = document(51, "2026-11-25 14:00", 1_794_900_000_000, Some(json!({ "id": client(51), "name": MARIE, "email": "marie@example.org", "phone": "+33123456789" })), false);
+    let mut host = stand_in(Scenario { documents: vec![only], ..Scenario::default() });
+    signed_in(&mut host);
+    let reply = refresh(&mut host, "en");
+    within_sioul_bounds(&reply);
+    // Sioul's docs/extensions.md, "The calls": {"contacts": [{"id", "name", "people": [{"id", "name",
+    // "given", "family", "phones", "emails", "org", "note"}]}]}, only the id and the name required.
+    assert_eq!(
+        reply["contacts"],
+        json!([{ "id": "clients", "name": "Clients", "people": [{ "id": "Cinvented0000000000000000051", "name": "Marie Exemple", "phones": ["+33123456789"], "emails": ["marie@example.org"] }] }])
+    );
+    assert_eq!(reply.as_object().unwrap().keys().collect::<Vec<_>>(), vec!["agendas", "contacts", "problem"]);
 }

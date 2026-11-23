@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const DAY_MINUTES: i64 = 1440;
 
 /// A `vevents` document, read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Appointment {
     /// The document id.
     pub id: String,
@@ -46,6 +46,8 @@ pub struct Appointment {
     pub client_id: Option<String>,
     pub client_name: Option<String>,
     pub phone: Option<String>,
+    /// The client's e-mail address (`cu.email`).
+    pub email: Option<String>,
     pub note: Option<String>,
     /// Its service id (`se`).
     pub service: Option<String>,
@@ -89,6 +91,7 @@ impl Appointment {
             client_id: client_text("id"),
             client_name: client_text("name"),
             phone: client_text("phone"),
+            email: client_text("email"),
             note: field_text(fields, "t"),
             service: field_text(fields, "se"),
             price: fields.get("p").and_then(Value::as_i64),
