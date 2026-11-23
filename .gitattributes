@@ -1,0 +1,2 @@
+# Recorded iCalendar answers keep their CRLF line ends (RFC 5545), whatever core.autocrlf says.
+*.ics -text

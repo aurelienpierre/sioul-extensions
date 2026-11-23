@@ -44,10 +44,10 @@ sha256 = "0145940e902dcd5d1191a38191b11faf1c60afbbd5c36a680a1a1f6da1eec3fe"
 
 [[extension]]
 id = "planity"
-version = "0.1.0"
+version = "0.2.0"
 interface = 1
 name = { en = "Planity appointments (unofficial)", fr = "Rendez-vous Planity (non officiel)" }
-about = { en = "A Planity Pro salon's appointments, from sixty days back to a hundred and twenty ahead, as one read-only agenda of busy time, into a calendar you choose. You sign in with the salon's email and password, which Sioul collects in its own form; only a refresh token is kept, never the password. Not Planity's: an independent, read-only client.", fr = "Les rendez-vous d’un salon Planity Pro, de soixante jours en arrière à cent vingt en avant, en un agenda en lecture seule de temps occupé, dans un calendrier que vous choisissez. Vous vous connectez avec l’e-mail et le mot de passe du salon, que Sioul recueille dans son propre formulaire ; seul un jeton de renouvellement est gardé, jamais le mot de passe. Pas celui de Planity : un client indépendant, en lecture seule." }
+about = { en = "A Planity Pro salon's appointments, from sixty days back to a hundred and twenty ahead, as one read-only agenda of busy time, into a calendar you choose. Each booking joins what Planity's own calendar export gives (the services, the prices, the cancellations, the recurring bookings) with what the salon's agenda gives (the client's name and phone, the note, the older bookings). You sign in with the salon's email and password and paste the calendar's web address (its export link, in Planity Pro's settings), which Sioul collects in its own form; only a refresh token and that address are kept, never the password. Not Planity's: an independent, read-only client.", fr = "Les rendez-vous d’un salon Planity Pro, de soixante jours en arrière à cent vingt en avant, en un agenda en lecture seule de temps occupé, dans un calendrier que vous choisissez. Chaque réservation réunit ce que donne l’export de calendrier de Planity (les prestations, les prix, les annulations, les rendez-vous récurrents) et ce que donne l’agenda du salon (le nom et le téléphone du client, la note, les réservations plus anciennes). Vous vous connectez avec l’e-mail et le mot de passe du salon et collez l’adresse web du calendrier (son lien d’export, dans les réglages de Planity Pro), que Sioul recueille dans son propre formulaire ; seuls un jeton de renouvellement et cette adresse sont gardés, jamais le mot de passe. Pas celui de Planity : un client indépendant, en lecture seule." }
 brings = ["agenda"]
 hosts = [
     "identitytoolkit.googleapis.com",
@@ -55,9 +55,9 @@ hosts = [
     "firestore.googleapis.com",
     "product.api.euwest1.prod.planityapp.com",
 ]
-credentials = ["email", "password"]
+credentials = ["email", "password", "web-address"]
 # Written at each release from the publisher's own build (README.md, "Making a
 # release"); the placeholder below is replaced by the hash tools/build.sh prints
 # and is signed only when the automation's build matches. Not yet built nor signed.
-file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/planity-0.1.0/planity-0.1.0.wasm"
+file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/planity-0.2.0/planity-0.2.0.wasm"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

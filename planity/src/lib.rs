@@ -3,20 +3,34 @@
 //! A Planity Pro salon agenda, read-only, for Sioul. **Unofficial**: not
 //! Planity's, not endorsed by it.
 //!
-//! Planity Pro is a Firebase web app (project `planity-production`). This
-//! extension signs in with the salon's email and password (the credentials
-//! sign-in Sioul collects in its own form), does Firebase's own dance to a
-//! Pro-claimed token, keeps only the resulting refresh token and the business
-//! id, and reads the `vevents` appointment documents over the Firestore REST
-//! API. Each appointment becomes one busy event; the salon's working time
-//! lands in a calendar the person chooses.
+//! Two sources each hold half of a booking, and neither is enough alone
+//! (`merge-design.md`):
+//!
+//! - **the official feed**: Planity's own iCalendar export of a calendar (its
+//!   "sync with another calendar" link, a keyed web address the person pastes
+//!   into Sioul's sign-in form): the times, the services, the prices, the
+//!   cancellations, the recurring series; no client's name nor phone;
+//! - **the Firestore read**: Planity Pro is a Firebase web app (project
+//!   `planity-production`); the extension signs in with the salon's email and
+//!   password, does Firebase's own dance to a Pro-claimed token, keeps only
+//!   the resulting refresh token, and reads the `vevents` appointment
+//!   documents over the Firestore REST API: the client's name and phone, the
+//!   note, the all-day blocks, the bookings older than the feed's window.
+//!
+//! Each booking becomes one busy event ([`merge`]); the salon's working time
+//! lands in a calendar the person chooses. When one source fails, the other's
+//! bookings still come, and nothing is removed (no `period`): degraded, never
+//! destructive.
 //!
 //! The data model and the request/response shapes are validated from a
-//! consented live capture, written down in `~/Life/coding/sioul/planity/`
-//! (`api.md`, `extension-spec.md`). No real account, business, client or
-//! token appears in this code or its tests; the Firebase API key and the
-//! Planity hostnames are the only real strings, both public.
+//! consented live capture, written down in the publisher's design notes
+//! (`api.md`, `extension-spec.md`, `merge-design.md`). No real account,
+//! business, client, token or key appears in this code or its tests; the
+//! Firebase API key and the Planity hostnames are the only real strings, both
+//! public.
 
+mod feed;
+mod merge;
 mod planityapi;
 #[cfg(test)]
 #[path = "../tests/recorded.rs"]
@@ -24,11 +38,10 @@ mod recorded;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use planityapi::Link;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sioul_extension::ical::{self, Calendar, Event};
+use sioul_extension::ical::Calendar;
 use sioul_extension::{Agenda, Call, Extension, Host, Period, Problem, ProblemKind, RefreshReply, Refused, SignInReply};
-use std::collections::BTreeMap;
 
 /// The extension.
 pub struct Planity;
@@ -42,30 +55,43 @@ pub const API_KEY: &str = "AIzaSyDrSE1PzMwLKyhEvh2x8eV7s1NYwKGRC5Q";
 
 const PRODUCT: &str = concat!("planity ", env!("CARGO_PKG_VERSION"));
 /// The window read each refresh: sixty days back, a hundred and twenty ahead
-/// (within Planity's four-hundred-day interface cap).
+/// (within the interface's four-hundred-day cap).
 const BEFORE_DAYS: i64 = 60;
 const AHEAD_DAYS: i64 = 120;
 /// The salon's zone: its `s` strings are Europe/Paris wall-clock, no zone.
 const ZONE: &str = "Europe/Paris";
-/// A whole day of minutes (an all-day block is `d` ≈ 1439).
-const DAY_MINUTES: i64 = 1440;
 /// The most the keyring keeps for an extension (docs/extensions.md).
 const KEPT_BYTES: usize = 2400;
+/// An agenda's name when the feed gives none.
+const DEFAULT_NAME: &str = "Planity";
 
 impl Extension for Planity {
     fn sign_in(host: &mut dyn Host, call: &Call) -> SignInReply {
         let Some(credentials) = call.credentials.as_ref() else {
             return SignInReply::Problem(Problem::new(ProblemKind::SignIn, "no credentials were given"));
         };
-        let (Some(email), Some(password)) = (
-            credentials.email.as_deref().filter(|value| !value.is_empty()),
-            credentials.password.as_deref().filter(|value| !value.is_empty()),
-        ) else {
-            return SignInReply::Problem(Problem::new(ProblemKind::SignIn, "an email and a password are needed"));
+        let present = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+        let (Some(email), Some(password), Some(address)) = (present(&credentials.email), present(&credentials.password), present(&credentials.web_address)) else {
+            return SignInReply::Problem(Problem::new(ProblemKind::SignIn, "an email, a password and the calendar's web address are needed"));
         };
         // Defensive: never let a credential reach the log, even though Sioul already hides them.
-        host.hide(&[email, password]);
-        match planityapi::sign_in(host, email, password).and_then(|(refresh, business)| keep(host, &refresh, &business)) {
+        host.hide(&[&email, &password, &address]);
+        // The link is checked before anything is asked of the network.
+        let link = match Link::read(&address) {
+            Ok(link) => link,
+            Err(why) => {
+                host.log(&format!("sign-in: {why}"));
+                return SignInReply::Problem(Problem::new(ProblemKind::SignIn, why));
+            }
+        };
+        host.hide(&[&link.key, &link.address]);
+        let signed = planityapi::sign_in(host, &email, &password).and_then(|(refresh, business)| {
+            if business != link.business {
+                return Err(Fault::SignIn("the web address is another business's calendar".into()));
+            }
+            keep(host, &Kept { r: Some(refresh), b: business, l: Some(link.address.clone()) })
+        });
+        match signed {
             Ok(()) => {
                 host.log("signed in to Planity");
                 SignInReply::SignedIn
@@ -79,101 +105,164 @@ impl Extension for Planity {
 
     fn refresh(host: &mut dyn Host, call: &Call) -> RefreshReply {
         let kept = match host.secret() {
-            Ok(Some(text)) => match serde_json::from_str::<Kept>(&text) {
-                Ok(kept) if !kept.r.is_empty() && !kept.b.is_empty() => kept,
+            Ok(Some(text)) => match serde_json::from_str::<Kept>(&text).map(Kept::trimmed) {
+                Ok(kept) if kept.r.is_some() || kept.l.is_some() => kept,
                 _ => return RefreshReply::problem(ProblemKind::SignIn, "the sign-in kept does not read"),
             },
             Ok(None) => return RefreshReply::problem(ProblemKind::SignIn, "no sign-in kept"),
             Err(refused) => return RefreshReply { agendas: Vec::new(), problem: Some(Fault::from(refused).problem()) },
         };
-        match read(host, &kept, call.french()) {
-            Ok(reply) => reply,
-            Err(fault) => {
-                host.log(&format!("refresh: {}", fault.detail()));
-                RefreshReply { agendas: Vec::new(), problem: Some(fault.problem()) }
-            }
-        }
+        read(host, kept, call.french())
     }
 }
 
 // ---------------------------------------------------------------- what is kept
 
-/// What the keyring holds: the refresh token B and the business id, never the
-/// password. Short keys so it fits.
+/// What the keyring holds: the refresh token B, the business id and the
+/// calendar's link, never the password. Short keys so it fits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Kept {
-    /// The refresh token B.
-    r: String,
+    /// The refresh token B (none: the feed alone, and Sioul asks to sign in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r: Option<String>,
     /// The business id.
+    #[serde(default)]
     b: String,
+    /// The calendar's export link (none: Firestore alone, and Sioul asks to sign in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    l: Option<String>,
 }
 
-/// Keeps the refresh token and the business id (never the password).
-fn keep(host: &mut dyn Host, refresh: &str, business: &str) -> Result<(), Fault> {
-    let text = serde_json::to_string(&Kept { r: refresh.to_string(), b: business.to_string() }).unwrap_or_default();
+impl Kept {
+    /// An empty value read as none.
+    fn trimmed(self) -> Self {
+        let some = |value: Option<String>| value.filter(|v| !v.trim().is_empty());
+        Self { r: some(self.r), b: self.b.trim().to_string(), l: some(self.l) }
+    }
+}
+
+/// Keeps the sign-in (never the password), when it fits the keyring.
+fn keep(host: &mut dyn Host, kept: &Kept) -> Result<(), Fault> {
+    let text = serde_json::to_string(kept).unwrap_or_default();
     if text.len() > KEPT_BYTES {
-        return Err(Fault::Changed("the sign-in kept is longer than the keyring keeps".into()));
+        return Err(Fault::SignIn("the sign-in is longer than the keyring keeps".into()));
     }
     host.keep_secret(&text).map_err(Fault::from)
 }
 
 // ---------------------------------------------------------------- the refresh
 
-/// Mints a fresh id token, reads the window's appointments, and builds one
-/// busy agenda per calendar.
-fn read(host: &mut dyn Host, kept: &Kept, french: bool) -> Result<RefreshReply, Fault> {
-    host.hide(&[&kept.r]);
-    let (id_token, rotated) = planityapi::mint(host, &kept.r)?;
-    host.hide(&[&id_token]);
-    if let Some(new_refresh) = rotated.filter(|new| new != &kept.r) {
-        host.hide(&[&new_refresh]);
-        keep(host, &new_refresh, &kept.b)?;
+/// Reads both sources, then one event per booking: one busy agenda per
+/// calendar. The period read goes with the agendas only when both answered;
+/// a sign-in that ended, on either side, is said with what still came.
+fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
+    if let Some(r) = kept.r.clone() {
+        host.hide(&[&r]);
+    }
+    if let Some(l) = kept.l.clone() {
+        host.hide(&[&l]);
+    }
+    let link = kept.l.as_deref().map(Link::read);
+    if let Some(Ok(link)) = &link {
+        host.hide(&[&link.key]);
+        if kept.b.is_empty() {
+            kept.b = link.business.clone();
+        }
     }
 
     let zone = jiff::tz::db().get(ZONE).unwrap_or(TimeZone::UTC);
     let now = host.now();
     let (from_ts, until_ts) = (now - BEFORE_DAYS * 86_400, now + AHEAD_DAYS * 86_400);
-    let from = local_string(from_ts, &zone)?;
-    let until = local_string(until_ts, &zone)?;
 
-    let documents = planityapi::read_vevents(host, &kept.b, &id_token, &from, &until)?;
-    host.log(&format!("refresh: {} appointment(s)", documents.len()));
-
-    // One agenda per distinct calendar `ca` (a multi-chair salon has several).
-    let mut by_calendar: BTreeMap<String, Vec<Event>> = BTreeMap::new();
-    for document in &documents {
-        let calendar = document
-            .fields
-            .get("ca")
-            .and_then(Value::as_str)
-            .or_else(|| document.fields.get("sca").and_then(Value::as_str))
-            .filter(|value| !value.is_empty())
-            .unwrap_or("planity")
-            .to_string();
-        if let Some(event) = event(document, &zone, french) {
-            by_calendar.entry(calendar).or_default().push(event);
-        }
+    // The Firestore half.
+    let firestore = firestore(host, &mut kept, &zone, from_ts, until_ts);
+    match &firestore {
+        Ok(appointments) => host.log(&format!("refresh: {} appointment(s) from Firestore", appointments.len())),
+        Err(fault) => host.log(&format!("refresh: Firestore not read: {}", fault.detail())),
+    }
+    // The feed half.
+    let feed = match &link {
+        None => Err(Fault::SignIn("no calendar web address kept".into())),
+        Some(Err(why)) => Err(Fault::SignIn((*why).into())),
+        Some(Ok(link)) => planityapi::read_feed(host, link).and_then(|text| feed::read(&text).ok_or_else(|| Fault::Changed("the calendar feed is not an iCalendar".into()))),
+    };
+    match &feed {
+        Ok(feed) => host.log(&format!("refresh: {} event(s) from the feed, {} that do not read", feed.events.len(), feed.skipped)),
+        Err(fault) => host.log(&format!("refresh: the feed not read: {}", fault.detail())),
     }
 
-    let period = Some(Period::between(from_ts, until_ts));
-    let mut agendas: Vec<Agenda> = by_calendar
+    let (appointments, feed) = match (firestore, feed) {
+        (Err(firestore), Err(feed)) => {
+            // Both failed: the problem, as before; a sign-in to renew first.
+            let problem = if firestore.problem().kind != ProblemKind::SignIn && feed.problem().kind == ProblemKind::SignIn { feed.problem() } else { firestore.problem() };
+            return RefreshReply { agendas: Vec::new(), problem: Some(problem) };
+        }
+        (firestore, feed) => (firestore, feed),
+    };
+    // The period, which lets the door remove what vanished, only when both answered.
+    let period = (appointments.is_ok() && feed.is_ok()).then(|| Period::between(from_ts, until_ts));
+    // A side that failed only says so when the person can mend it (a sign-in, a refusal).
+    let said = |fault: &Fault| Some(fault.problem()).filter(|p| matches!(p.kind, ProblemKind::SignIn | ProblemKind::Refused));
+    let problem = match (&appointments, &feed) {
+        (Err(fault), _) | (_, Err(fault)) => said(fault),
+        _ => None,
+    };
+    let appointments = appointments.unwrap_or_default();
+    let feed = feed.ok();
+
+    let calendar = match &link {
+        Some(Ok(link)) => Some(link.calendar.clone()),
+        _ => None,
+    };
+    let merged = merge::merge(feed.as_ref(), &appointments, (from_ts, until_ts), calendar.as_deref(), french);
+    for line in &merged.log {
+        host.log(line);
+    }
+
+    // The feed's calendars take its name; the others, Planity's.
+    let named = feed.as_ref().and_then(|f| f.name.clone());
+    let feed_calendars: Vec<&str> = calendar.iter().map(String::as_str).chain(feed.iter().flat_map(|f| f.events.iter().filter_map(|e| e.calendar.as_deref()))).collect();
+    let mut calendars = merged.calendars;
+    // The link's calendar is always handed back, empty or not, so that its period reaches the door.
+    if let Some(own) = &calendar {
+        calendars.entry(own.clone()).or_default();
+    }
+    if calendars.is_empty() {
+        calendars.insert("planity".into(), Vec::new());
+    }
+    let agendas = calendars
         .into_iter()
-        .map(|(calendar, mut events)| {
-            events.sort_by(|a, b| (a.start, &a.uid).cmp(&(b.start, &b.uid)));
-            let text = Calendar { product: PRODUCT.into(), name: "Planity".into(), events }.text();
-            Agenda { id: agenda_id(&calendar), name: "Planity".into(), calendar: text, period: period.clone(), unread: Vec::new(), busy: true }
+        .map(|(id, events)| {
+            let name = named.clone().filter(|_| feed_calendars.contains(&id.as_str())).unwrap_or_else(|| DEFAULT_NAME.into());
+            let text = Calendar { product: PRODUCT.into(), name: name.clone(), events }.text();
+            Agenda { id: agenda_id(&id), name, calendar: text, period: period.clone(), unread: Vec::new(), busy: true }
         })
         .collect();
+    RefreshReply { agendas, problem }
+}
 
-    // No appointment at all in the window: one empty agenda still carries the period, so the
-    // door clears what vanished. Its id is the default key, which a one-calendar salon's
-    // appointments never take while there are any (noted in the handoff).
-    if agendas.is_empty() {
-        let text = Calendar { product: PRODUCT.into(), name: "Planity".into(), events: Vec::new() }.text();
-        agendas.push(Agenda { id: "planity".into(), name: "Planity".into(), calendar: text, period, unread: Vec::new(), busy: true });
+/// Mints a fresh id token (keeping a rotated refresh token) and reads the
+/// window's appointment documents.
+fn firestore(host: &mut dyn Host, kept: &mut Kept, zone: &TimeZone, from_ts: i64, until_ts: i64) -> Result<Vec<merge::Appointment>, Fault> {
+    let refresh = kept.r.clone().ok_or_else(|| Fault::SignIn("no Firebase sign-in kept".into()))?;
+    if kept.b.is_empty() {
+        return Err(Fault::SignIn("no business kept".into()));
     }
-
-    Ok(RefreshReply { agendas, problem: None })
+    let (id_token, rotated) = planityapi::mint(host, &refresh)?;
+    host.hide(&[&id_token]);
+    if let Some(new_refresh) = rotated.filter(|new| *new != refresh) {
+        host.hide(&[&new_refresh]);
+        kept.r = Some(new_refresh);
+        keep(host, kept)?;
+    }
+    let from = local_string(from_ts, zone)?;
+    let until = local_string(until_ts, zone)?;
+    let documents = planityapi::read_vevents(host, &kept.b, &id_token, &from, &until)?;
+    let appointments: Vec<merge::Appointment> = documents.iter().filter_map(|d| merge::Appointment::read(d, zone)).collect();
+    if appointments.len() < documents.len() {
+        host.log(&format!("refresh: {} appointment(s) whose start does not read", documents.len() - appointments.len()));
+    }
+    Ok(appointments)
 }
 
 /// Seconds since 1970 (UTC) as a Europe/Paris wall-clock string `"YYYY-MM-DD HH:MM"`.
@@ -182,77 +271,10 @@ fn local_string(at: i64, zone: &TimeZone) -> Result<String, Fault> {
     Ok(instant.to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M").to_string())
 }
 
-// ---------------------------------------------------------------- a vevent → an event
-
-/// A `vevents` document as a busy event. A client appointment (`cu.id`
-/// present) is titled by the client's name; a block or closure (no `cu.id`),
-/// "Unavailable" / « Indisponible ». An all-day block (`ad`) is a floating
-/// whole-day event. A cancelled one (`dat` present) is cancelled. The
-/// description carries the duration, the price, the phone and the note. The
-/// event is left busy (no `TRANSP`): the agenda declares `busy: true` and the
-/// door writes the final transparency from the person's choice.
-fn event(document: &planityapi::Document, zone: &TimeZone, french: bool) -> Option<Event> {
-    let fields = &document.fields;
-    let start_text = fields.get("s").and_then(Value::as_str)?;
-    let duration = fields.get("d").and_then(Value::as_i64).unwrap_or(0).max(0);
-    let all_day = fields.get("ad").and_then(Value::as_bool).unwrap_or(false);
-    let cancelled = fields.get("dat").is_some_and(|value| !value.is_null());
-    let client = fields.get("cu").filter(|cu| cu.is_object());
-    let client_id = client.and_then(|cu| cu.get("id")).and_then(Value::as_str).filter(|id| !id.is_empty());
-
-    let (start, end) = if all_day {
-        let (year, month, day) = parse_date(start_text)?;
-        let first = ical::days(year, month, day) * 86_400;
-        let span_days = ((duration + DAY_MINUTES - 1) / DAY_MINUTES).max(1);
-        (first, first + span_days * 86_400)
-    } else {
-        let start = parse_local(start_text, zone)?;
-        (start, start + duration * 60)
-    };
-
-    let summary = match client_id {
-        Some(_) => client
-            .and_then(|cu| cu.get("name"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(if french { "Rendez-vous" } else { "Appointment" })
-            .to_string(),
-        None => if french { "Indisponible" } else { "Unavailable" }.to_string(),
-    };
-
-    let mut parts: Vec<String> = Vec::new();
-    if duration > 0 && !all_day {
-        parts.push(if french { format!("Durée\u{a0}: {duration} min") } else { format!("Duration: {duration} min") });
-    }
-    if let Some(cents) = fields.get("p").and_then(Value::as_i64) {
-        let (euros, remainder) = (cents / 100, (cents % 100).abs());
-        parts.push(format!("{euros},{remainder:02}\u{a0}€"));
-    }
-    if let Some(phone) = client.and_then(|cu| cu.get("phone")).and_then(Value::as_str).map(str::trim).filter(|phone| !phone.is_empty()) {
-        parts.push(phone.to_string());
-    }
-    if let Some(note) = fields.get("t").and_then(Value::as_str).map(str::trim).filter(|note| !note.is_empty()) {
-        parts.push(note.to_string());
-    }
-    let description = (!parts.is_empty()).then(|| parts.join("\n"));
-
-    Some(Event {
-        uid: document.id.clone(),
-        start,
-        end,
-        summary,
-        location: None,
-        description,
-        cancelled,
-        // The agenda declares busy; the door decides the transparency.
-        transparent: false,
-        all_day,
-    })
-}
+// ---------------------------------------------------------------- times and ids
 
 /// The date part of `"YYYY-MM-DD HH:MM"` as `(year, month, day)`.
-fn parse_date(text: &str) -> Option<(i64, u32, u32)> {
+pub(crate) fn parse_date(text: &str) -> Option<(i64, u32, u32)> {
     let mut fields = text.get(0..10)?.split('-');
     let year = fields.next()?.parse().ok()?;
     let month = fields.next()?.parse().ok()?;
@@ -262,7 +284,7 @@ fn parse_date(text: &str) -> Option<(i64, u32, u32)> {
 
 /// `"YYYY-MM-DD HH:MM"` read as a Europe/Paris wall clock, to its UTC instant
 /// in seconds (summer or winter time, DST gaps and folds disambiguated by jiff).
-fn parse_local(text: &str, zone: &TimeZone) -> Option<i64> {
+pub(crate) fn parse_local(text: &str, zone: &TimeZone) -> Option<i64> {
     let mut normalized = text.replace(' ', "T");
     if normalized.len() == 16 {
         normalized.push_str(":00");
@@ -342,6 +364,7 @@ impl From<Refused> for Fault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sioul_extension::ical;
 
     #[test]
     fn ids_and_times_read() {

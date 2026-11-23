@@ -3,7 +3,7 @@
 //! The Planity Pro client: Firebase email/password sign-in, the Pro-token
 //! exchange, the `securetoken` refresh, and the Firestore REST `:runQuery`
 //! over the `vevents` collection, paginated. The data model and the exact
-//! request/response shapes are validated in `~/Life/coding/sioul/planity/`
+//! request/response shapes are validated in the publisher's design notes
 //! (`api.md`, `extension-spec.md`), from a consented live capture; no real
 //! value appears here. Every answer is read defensively: what does not read
 //! is a problem for Sioul to say, never a panic.
@@ -191,6 +191,57 @@ pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &
     Err(Fault::Changed("too many appointment pages".into()))
 }
 
+// ---------------------------------------------------------------- the official feed
+
+/// The host and the path of Planity's official iCalendar export (`api.md`).
+pub const FEED_HOST: &str = "product.api.euwest1.prod.planityapp.com";
+pub const FEED_PATH: &str = "/getCalendarIcalEvents";
+
+/// A calendar's export link, checked: `https`, Planity's own host (no port,
+/// no user), its export path, and a query naming the calendar, the business
+/// and the key. The key makes the link a capability: it is hidden from the
+/// log and kept only in the keyring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    /// The whole address, as pasted (trimmed, any `#…` left out).
+    pub address: String,
+    pub calendar: String,
+    pub business: String,
+    pub key: String,
+}
+
+impl Link {
+    /// The link checked; what is wrong with it, otherwise (for the log, never the link itself).
+    pub fn read(text: &str) -> Result<Self, &'static str> {
+        let address = text.trim().split('#').next().unwrap_or("").to_string();
+        let rest = address.strip_prefix("https://").ok_or("the web address is not https")?;
+        let authority = rest.split(['/', '?']).next().unwrap_or("");
+        if !authority.eq_ignore_ascii_case(FEED_HOST) {
+            return Err("the web address is not Planity's calendar export");
+        }
+        let path = rest[authority.len()..].split('?').next().unwrap_or("");
+        if path != FEED_PATH {
+            return Err("the web address is not a calendar export");
+        }
+        let value = |name: &str| url::query_value(&address, name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let calendar = value("calendarId").ok_or("the web address names no calendar")?;
+        let business = value("businessId").ok_or("the web address names no business")?;
+        let key = value("key").ok_or("the web address has no key")?;
+        Ok(Self { address, calendar, business, key })
+    }
+}
+
+/// The calendar's feed, as text. A refusal of the key (401, 403) is the end
+/// of the link (the person pastes it again); anything else, a feed not read.
+pub fn read_feed(host: &mut dyn Host, link: &Link) -> Result<String, Fault> {
+    let answer = host.web(&Request::get(&link.address).header("Accept", "text/calendar"))?;
+    match answer.status {
+        200 => Ok(answer.body),
+        401 | 403 => Err(Fault::SignIn(format!("the calendar's web address was refused: {}", answer.status))),
+        status => Err(Fault::Status(status, "the calendar feed".into())),
+    }
+}
+
 /// The `structuredQuery` body: the `vevents` collection, `s >= from`, ordered
 /// by `s` then `__name__` (both ascending), paged after a cursor.
 fn query_body(from: &str, after: Option<&(String, String)>) -> Value {
@@ -313,6 +364,29 @@ mod tests {
         assert!(is_push_id("-Binvented0000000000"));
         assert!(!is_push_id("-Bshort"));
         assert!(!is_push_id("Binvented00000000000"));
+    }
+
+    #[test]
+    fn a_calendar_link_is_checked() {
+        let good = "https://product.api.euwest1.prod.planityapp.com/getCalendarIcalEvents?calendarId=-Cinvented0000000000&businessId=-Binvented0000000000&key=KEYinvented0000";
+        let link = Link::read(&format!("  {good}  ")).unwrap();
+        assert_eq!((link.address.as_str(), link.calendar.as_str(), link.business.as_str(), link.key.as_str()), (good, "-Cinvented0000000000", "-Binvented0000000000", "KEYinvented0000"));
+        assert_eq!(Link::read(&format!("{good}#here")).unwrap().address, good, "a fragment is left out");
+        for (wrong, why) in [
+            (good.replacen("https://", "http://", 1), "not https"),
+            (good.replacen("product.api.euwest1.prod.planityapp.com", "product.api.euwest1.prod.planityapp.com.example.org", 1), "another host"),
+            (good.replacen("product.api.euwest1.prod.planityapp.com", "product.api.euwest1.prod.planityapp.com:8443", 1), "a port"),
+            (good.replacen("https://", "https://someone@", 1), "a user"),
+            (good.replacen("/getCalendarIcalEvents", "/getCalendarIcalEvents/x", 1), "another path"),
+            (good.replacen("/getCalendarIcalEvents", "/getProAuthToken", 1), "another path"),
+            (good.replacen("&key=KEYinvented0000", "", 1), "no key"),
+            (good.replacen("key=KEYinvented0000", "key=", 1), "an empty key"),
+            (good.replacen("calendarId=-Cinvented0000000000&", "", 1), "no calendar"),
+            (good.replacen("businessId=-Binvented0000000000&", "", 1), "no business"),
+            (String::new(), "nothing"),
+        ] {
+            assert!(Link::read(&wrong).is_err(), "{why}: {wrong}");
+        }
     }
 
     #[test]
