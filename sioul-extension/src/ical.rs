@@ -21,6 +21,11 @@ pub struct Event {
     pub cancelled: bool,
     /// `TRANSP:TRANSPARENT`: the time it takes is not the person's own (a child's lesson).
     pub transparent: bool,
+    /// A whole-day event, written as floating `DATE` values (`DTSTART;VALUE=DATE`,
+    /// `DTEND;VALUE=DATE` the day after the last), no zone. Then `start` and
+    /// `end` are UTC midnight of the civil date(s) (`days(y, m, d) * 86_400`):
+    /// the day is read from them, never a wall-clock time.
+    pub all_day: bool,
 }
 
 /// An agenda's events, and the program that wrote them.
@@ -46,8 +51,16 @@ impl Calendar {
             line("BEGIN:VEVENT".into());
             line(format!("UID:{}", escape(&event.uid)));
             line(format!("DTSTAMP:{}", stamp(event.start)));
-            line(format!("DTSTART:{}", stamp(event.start)));
-            line(format!("DTEND:{}", stamp(event.end.max(event.start))));
+            if event.all_day {
+                // Floating DATE values; DTEND is the day after the last (RFC 5545 §3.6.1).
+                let first = event.start.div_euclid(86_400);
+                let after = event.end.max(event.start + 86_400).div_euclid(86_400).max(first + 1);
+                line(format!("DTSTART;VALUE=DATE:{}", date_stamp(first)));
+                line(format!("DTEND;VALUE=DATE:{}", date_stamp(after)));
+            } else {
+                line(format!("DTSTART:{}", stamp(event.start)));
+                line(format!("DTEND:{}", stamp(event.end.max(event.start))));
+            }
             line(format!("SUMMARY:{}", escape(&event.summary)));
             if let Some(location) = event.location.as_deref().filter(|l| !l.trim().is_empty()) {
                 line(format!("LOCATION:{}", escape(location)));
@@ -122,6 +135,12 @@ pub fn days(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Days since 1970 as a floating `DATE` value `YYYYMMDD` (no zone).
+pub fn date_stamp(days_since_epoch: i64) -> String {
+    let (y, m, d) = civil(days_since_epoch);
+    format!("{y:04}{m:02}{d:02}")
+}
+
 /// Seconds since 1970 as `YYYYMMDDTHHMMSSZ`.
 pub fn stamp(at: i64) -> String {
     let (y, m, d) = civil(at.div_euclid(86_400));
@@ -154,6 +173,7 @@ mod tests {
                 description: Some(format!("M. Martin\n{}", "é".repeat(80))),
                 cancelled: true,
                 transparent: true,
+                all_day: false,
             }],
         };
         let text = calendar.text();
@@ -168,6 +188,22 @@ mod tests {
         assert!(unfolded.contains(&format!("DESCRIPTION:M. Martin\\n{}\r\n", "é".repeat(80))));
         assert!(text.ends_with("END:VCALENDAR\r\n"));
         assert_eq!(calendar.text(), text, "the same events, the same bytes");
+    }
+
+    #[test]
+    fn an_all_day_event_is_written_as_floating_dates() {
+        // start and end are UTC midnight of the civil date; the day is read from them.
+        let day = days(2026, 11, 25) * 86_400;
+        let calendar = Calendar {
+            product: "test 0.1.0".into(),
+            name: "Planity".into(),
+            events: vec![Event { uid: "B-1".into(), start: day, end: day + 86_400, summary: "Unavailable".into(), location: None, description: None, cancelled: false, transparent: false, all_day: true }],
+        };
+        let text = calendar.text();
+        assert!(text.contains("DTSTART;VALUE=DATE:20261125\r\n"), "{text}");
+        assert!(text.contains("DTEND;VALUE=DATE:20261126\r\n"), "the day after the last: {text}");
+        assert!(text.contains("DTSTAMP:20261125T000000Z\r\n"), "{text}");
+        assert!(!text.contains("TRANSP:"), "a busy event writes no TRANSP; the door decides: {text}");
     }
 
     #[test]

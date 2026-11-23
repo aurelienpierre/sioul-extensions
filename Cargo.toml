@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [workspace]
 resolver = "3"
-members = ["sioul-extension", "skolengo"]
+members = ["sioul-extension", "skolengo", "planity"]
 
 [workspace.package]
 edition = "2024"

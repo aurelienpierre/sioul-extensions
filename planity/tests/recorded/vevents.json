@@ -1,0 +1,533 @@
+[
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000001",
+      "fields": {
+        "s": {
+          "stringValue": "2026-11-25 14:00"
+        },
+        "st": {
+          "integerValue": "840"
+        },
+        "d": {
+          "integerValue": "30"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000001"
+        },
+        "p": {
+          "integerValue": "4500"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "website"
+        },
+        "t": {
+          "stringValue": "Cheveux longs"
+        },
+        "cat": {
+          "integerValue": "1794813600000"
+        },
+        "uat": {
+          "integerValue": "1794900000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000002",
+      "fields": {
+        "s": {
+          "stringValue": "2026-12-02 10:00"
+        },
+        "st": {
+          "integerValue": "600"
+        },
+        "d": {
+          "integerValue": "60"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000002"
+        },
+        "p": {
+          "integerValue": "6500"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sq": {
+          "stringValue": "-Vinvented0000000002"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1795013600000"
+        },
+        "uat": {
+          "integerValue": "1795100000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000003",
+      "fields": {
+        "s": {
+          "stringValue": "2026-12-02 11:00"
+        },
+        "st": {
+          "integerValue": "660"
+        },
+        "d": {
+          "integerValue": "35"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000001"
+        },
+        "p": {
+          "integerValue": "4500"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sq": {
+          "stringValue": "-Vinvented0000000002"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1795013600000"
+        },
+        "uat": {
+          "integerValue": "1795100000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000004",
+      "fields": {
+        "s": {
+          "stringValue": "2026-12-02 11:30"
+        },
+        "st": {
+          "integerValue": "690"
+        },
+        "d": {
+          "integerValue": "30"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000003"
+        },
+        "p": {
+          "integerValue": "1000"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sq": {
+          "stringValue": "-Vinvented0000000002"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1795013600000"
+        },
+        "uat": {
+          "integerValue": "1795100000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000005",
+      "fields": {
+        "s": {
+          "stringValue": "2026-11-27 09:00"
+        },
+        "st": {
+          "integerValue": "540"
+        },
+        "d": {
+          "integerValue": "60"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000004"
+        },
+        "p": {
+          "integerValue": "6000"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000002b"
+              },
+              "name": {
+                "stringValue": "Paul Exemple"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1794913600000"
+        },
+        "uat": {
+          "integerValue": "1795000000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000006",
+      "fields": {
+        "s": {
+          "stringValue": "2026-12-10 16:00"
+        },
+        "st": {
+          "integerValue": "960"
+        },
+        "d": {
+          "integerValue": "45"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000005"
+        },
+        "p": {
+          "integerValue": "3000"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "dat": {
+          "timestampValue": "2026-11-21T18:00:00Z"
+        },
+        "dby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1795213600000"
+        },
+        "uat": {
+          "integerValue": "1795300000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000011",
+      "fields": {
+        "s": {
+          "stringValue": "2026-10-15 11:00"
+        },
+        "st": {
+          "integerValue": "660"
+        },
+        "d": {
+          "integerValue": "30"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000001"
+        },
+        "p": {
+          "integerValue": "4500"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000001a"
+              },
+              "name": {
+                "stringValue": "Marie Exemple"
+              },
+              "email": {
+                "stringValue": "marie@example.org"
+              },
+              "phone": {
+                "stringValue": "+33123456789"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "website"
+        },
+        "t": {
+          "stringValue": "Première visite"
+        },
+        "cat": {
+          "integerValue": "1791913600000"
+        },
+        "uat": {
+          "integerValue": "1792000000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000012",
+      "fields": {
+        "s": {
+          "stringValue": "2026-12-24 00:00"
+        },
+        "st": {
+          "integerValue": "0"
+        },
+        "d": {
+          "integerValue": "1439"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "d": {
+                "booleanValue": true
+              }
+            }
+          }
+        },
+        "ad": {
+          "booleanValue": true
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "t": {
+          "stringValue": "Congés"
+        },
+        "cat": {
+          "integerValue": "1794963600000"
+        },
+        "uat": {
+          "integerValue": "1795050000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "document": {
+      "name": "projects/planity-production/databases/(default)/documents/businesses/-Binvented0000000000/vevents/-Vinvented0000000013",
+      "fields": {
+        "s": {
+          "stringValue": "2026-10-20 09:00"
+        },
+        "st": {
+          "integerValue": "540"
+        },
+        "d": {
+          "integerValue": "60"
+        },
+        "se": {
+          "stringValue": "-Sinvented0000000004"
+        },
+        "p": {
+          "integerValue": "6000"
+        },
+        "cu": {
+          "mapValue": {
+            "fields": {
+              "id": {
+                "stringValue": "clientinvented0000000000002b"
+              },
+              "name": {
+                "stringValue": "Paul Exemple"
+              }
+            }
+          }
+        },
+        "ca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "sca": {
+          "stringValue": "-Cinvented0000000000"
+        },
+        "cby": {
+          "stringValue": "pro"
+        },
+        "dat": {
+          "timestampValue": "2026-10-19T08:00:00Z"
+        },
+        "dby": {
+          "stringValue": "pro"
+        },
+        "cat": {
+          "integerValue": "1792413600000"
+        },
+        "uat": {
+          "integerValue": "1792500000000"
+        }
+      },
+      "createTime": "2026-11-01T09:00:00.000000Z",
+      "updateTime": "2026-11-20T09:00:00.000000Z"
+    },
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  },
+  {
+    "readTime": "2026-11-22T10:00:00.000000Z"
+  }
+]

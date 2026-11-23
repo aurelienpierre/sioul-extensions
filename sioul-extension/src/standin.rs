@@ -45,6 +45,20 @@ impl StandIn {
         self.log.iter().any(|l| l.contains(value))
     }
 
+    /// A credentials `sign-in` call, run as Sioul's engine runs one
+    /// (login-core-design.md): every value is hidden from the log first, then
+    /// the values are handed to the extension in the call JSON under their
+    /// fixed kind (`email`, `password`…). The extension does its own auth and
+    /// keeps only what it chooses through `secret`; Sioul keeps nothing of
+    /// them after the call. Returns the reply as JSON.
+    pub fn sign_in_with<E: crate::Extension>(&mut self, lang: &str, choice: Option<&str>, credentials: &[(&str, &str)]) -> Value {
+        let values: Vec<&str> = credentials.iter().map(|(_, value)| *value).collect();
+        self.hide(&values);
+        let fields: serde_json::Map<String, Value> = credentials.iter().map(|(kind, value)| ((*kind).to_string(), Value::String((*value).to_string()))).collect();
+        let call = json!({ "interface": crate::INTERFACE, "call": "sign-in", "lang": lang, "choice": choice, "credentials": fields });
+        serde_json::from_str(&crate::run::<E>(self, call.to_string().as_bytes())).unwrap_or(Value::Null)
+    }
+
     fn checked(&self, request: &Request) -> Result<(), Refused> {
         let host = crate::url::https_host(&request.url).ok_or_else(|| Refused("scheme".into()))?;
         if !self.hosts.is_empty() && !self.hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {

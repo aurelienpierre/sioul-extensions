@@ -1,0 +1,23 @@
+[package]
+name = "planity"
+description = "A Planity Pro salon agenda as a read-only iCalendar agenda, and the clients of its appointments as contacts, for Sioul: unofficial, not the vendor's."
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The recorded answers' tests run as the crate's own (`src/lib.rs`, `mod recorded`),
+# with invented business, client and tokens for them alone (`tests/recorded.rs`).
+autotests = false
+
+[lib]
+# The cdylib is the extension's file (wasm32-unknown-unknown); the rlib, its tests on a computer.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sioul-extension = { path = "../sioul-extension" }
+serde.workspace = true
+serde_json.workspace = true
+# The salon's times are Europe/Paris wall-clock strings with no zone: its zone
+# database is built into the file (DST-aware), the same on every system.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }

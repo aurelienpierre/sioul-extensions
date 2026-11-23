@@ -16,7 +16,7 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-all="skolengo"
+all="skolengo planity"
 names=${*:-$all}
 target=wasm32-unknown-unknown
 if [ ! -d "$(rustc --print target-libdir --target "$target" 2>/dev/null)" ]; then

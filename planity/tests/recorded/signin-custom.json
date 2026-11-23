@@ -1,0 +1,7 @@
+{
+  "kind": "identitytoolkit#VerifyCustomTokenResponse",
+  "idToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImludmVudGVkIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vcGxhbml0eS1wcm9kdWN0aW9uIiwiYXVkIjoicGxhbml0eS1wcm9kdWN0aW9uIiwiYXV0aF90aW1lIjoxNzYzODAwMDAwLCJ1c2VyX2lkIjoidWlkaW52ZW50ZWQwMDAwMDAwMDAwMDAwMDAwIiwic3ViIjoidWlkaW52ZW50ZWQwMDAwMDAwMDAwMDAwMDAwIiwiaWF0IjoxNzYzODAwMDAwLCJleHAiOjE3NjM4MDM2MDAsInBsUHJvIjp0cnVlLCJzb3VyY2UiOiJ3ZWIiLCJpc0J1c2luZXNzU2hhcmRlZCI6dHJ1ZSwiaXNVc2VyU2hhcmRlZCI6dHJ1ZSwiLUJpbnZlbnRlZDAwMDAwMDAwMDAiOjF9.c2lnbmF0dXJlLWludmVudGVk",
+  "refreshToken": "RT-custom-B-invented-000000000000",
+  "expiresIn": "3600",
+  "isNewUser": false
+}
