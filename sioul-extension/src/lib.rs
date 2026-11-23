@@ -193,8 +193,8 @@ impl Call {
 
 /// The credential values a `sign-in` call may carry, each under its fixed
 /// kind (login-core-design.md's closed set: `email`, `username`, `password`,
-/// `server`, `one-time-code`). Only the kinds the signed manifest declares
-/// are ever filled.
+/// `server`, `one-time-code`, `web-address`). Only the kinds the signed
+/// manifest declares are ever filled.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct Credentials {
     #[serde(default)]
@@ -207,6 +207,10 @@ pub struct Credentials {
     pub server: Option<String>,
     #[serde(default, rename = "one-time-code")]
     pub one_time_code: Option<String>,
+    /// A web address the person pastes (a calendar's keyed export link): not
+    /// masked in Sioul's form, hidden from the log like every value.
+    #[serde(default, rename = "web-address")]
+    pub web_address: Option<String>,
 }
 
 /// One thing the person may choose before a sign-in (a platform, a school).
@@ -476,5 +480,12 @@ mod tests {
         assert_eq!(bare.credentials, None);
         let coded: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in","credentials":{"one-time-code":"123456"}}"#).unwrap();
         assert_eq!(coded.credentials.unwrap().one_time_code.as_deref(), Some("123456"));
+        // The web-address kind reads under its kebab key, beside the others.
+        let linked: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in","credentials":{"email":"a@b.org","password":"pw","web-address":"https://example.org/feed?key=k"}}"#).unwrap();
+        let credentials = linked.credentials.unwrap();
+        assert_eq!(credentials.web_address.as_deref(), Some("https://example.org/feed?key=k"));
+        assert_eq!(credentials.email.as_deref(), Some("a@b.org"));
+        let unlinked: Call = serde_json::from_str(r#"{"interface":1,"call":"sign-in","credentials":{"web_address":"x"}}"#).unwrap();
+        assert_eq!(unlinked.credentials.unwrap().web_address, None, "only the kebab key is the contract");
     }
 }
