@@ -23,7 +23,8 @@
 //! - 10: past the read window, the feed alone;
 //! - 11: older than the feed's window, Firestore alone, its service named by the feed's map;
 //! - 12: an all-day block, Firestore alone;
-//! - 13: a cancelled (`dat`) booking, Firestore alone.
+//! - 13: a cancelled (`dat`) booking, Firestore alone;
+//! - 14, 15: a `DAILY;INTERVAL=7` and a `WEEKLY;INTERVAL=2` series, each cancelled as a whole.
 
 use crate::Planity;
 use serde_json::{Value, json};
@@ -425,6 +426,34 @@ fn series_expand_over_the_window_in_wall_clock_time() {
     assert_eq!(&dates[..4], &["20261103", "20261105", "20261117", "20261119"]);
     assert_eq!(dates[19], "20270311");
     assert!(coiffage.iter().all(|(_, event)| has(event, "SUMMARY:Coiffage")), "{coiffage:?}");
+}
+
+#[test]
+fn a_series_cancelled_as_a_whole_hands_back_no_occurrence() {
+    let count = |calendar: &str, key: &str| vevents(calendar).into_iter().filter(|(uid, _)| uid.starts_with(&format!("{key}-"))).count();
+    let mut host = stand_in(Scenario::default());
+    signed_in(&mut host);
+    let calendar = unfolded(&refresh(&mut host, "en")["agendas"][0]);
+    for key in [v(14), v(15)] {
+        assert!(!calendar.contains(&format!("UID:{key}")), "{key}: no cancelled occurrence per date");
+    }
+    assert!(host.log.iter().any(|l| l.contains("2 series cancelled as a whole left out")), "{:?}", host.log);
+    // The series beside them still expand; a cancelled one-off booking is still said cancelled.
+    assert_eq!((count(&calendar, &v(7)), count(&calendar, &v(8))), (12, 20));
+    assert!(has(&vevent(&calendar, &v(5)), "STATUS:CANCELLED"));
+    // The feed alone leaves them out too.
+    let mut host = stand_in(Scenario::default());
+    host.secret = Some(json!({ "b": BUSINESS, "l": link() }).to_string());
+    let calendar = unfolded(&refresh(&mut host, "en")["agendas"][0]);
+    assert_eq!((count(&calendar, &v(14)), count(&calendar, &v(15))), (0, 0));
+    // Not cancelled, the same series comes: every Thursday from 8 October to the window's end.
+    let feed = recorded("feed.ics").replacen("RRULE:FREQ=DAILY;INTERVAL=7\r\nSTATUS:CANCELLED\r\n", "RRULE:FREQ=DAILY;INTERVAL=7\r\n", 1);
+    let mut host = stand_in(Scenario { feed: (200, feed), ..Scenario::default() });
+    signed_in(&mut host);
+    let calendar = unfolded(&refresh(&mut host, "en")["agendas"][0]);
+    assert_eq!(count(&calendar, &v(14)), 24, "{calendar}");
+    assert!(has(&vevent(&calendar, &format!("{}-20261008", v(14))), "STATUS:CONFIRMED"));
+    assert_eq!(count(&calendar, &v(15)), 0);
 }
 
 #[test]

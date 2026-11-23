@@ -13,6 +13,8 @@
 //!   appointment ids or its `UID`, and those of the same `sq`.
 //! - **The fresher record by `uat`** gives the times and the cancelled state;
 //!   a tie, or a time unknown on either side, goes to the feed.
+//! - **A series cancelled as a whole** hands back no occurrence (a cancelled
+//!   one-off booking is handed back cancelled).
 //! - **Maps from everything read**: a client id to the client's name and
 //!   phone (the documents' `cu`), a service id to its name (the feed's), so
 //!   that a booking only one source holds is named too.
@@ -299,9 +301,17 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
         bookings.push(booking);
     }
 
+    let mut cancelled_series = 0usize;
     for event in &series {
         let fb = FeedBooking { events: vec![event] };
+        // The documents of a series are its own, whatever becomes of it.
         let joined = join(event.appointment_ids.iter().map(String::as_str).chain([event.uid.as_str()]), &event.key, &by_id, &by_key, &mut used, appointments);
+        // A series cancelled as a whole hands back no occurrence: none of its dates holds a
+        // booking any more (a cancelled one-off booking, by contrast, is said cancelled).
+        if event.cancelled {
+            cancelled_series += 1;
+            continue;
+        }
         let considered = considered(&joined);
         let (occurrences, expansion) = feed::expand(event, from, until);
         match &expansion {
@@ -350,8 +360,11 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
     merged.log.push(format!(
         "merged: {} one-off booking(s) from the feed ({joined_count} joined, {feed_only_count} feed only, {firestore_wins} with fresher Firestore times), {} series, {firestore_only} from Firestore alone",
         one_offs.len(),
-        series.len()
+        series.len() - cancelled_series
     ));
+    if cancelled_series > 0 {
+        merged.log.push(format!("{cancelled_series} series cancelled as a whole left out"));
+    }
 
     // One event per UID in each calendar, in order.
     let mut doubles = 0;
