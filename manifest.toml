@@ -4,7 +4,7 @@
 format = 1
 # Grows by one with each manifest signed: Sioul refuses a lower one than the
 # last it accepted, so that an older manifest cannot be served again.
-serial = 1
+serial = 2
 
 [[extension]]
 id = "skolengo"
@@ -41,3 +41,23 @@ sign_in = "skoapp-prod://sign-in-callback"
 # Rust 1.99.0 at the commit that tags skolengo-0.1.0.
 file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/skolengo-0.1.0/skolengo-0.1.0.wasm"
 sha256 = "0145940e902dcd5d1191a38191b11faf1c60afbbd5c36a680a1a1f6da1eec3fe"
+
+[[extension]]
+id = "planity"
+version = "0.2.0"
+interface = 1
+name = { en = "Planity appointments (unofficial)", fr = "Rendez-vous Planity (non officiel)" }
+about = { en = "A Planity Pro salon's appointments, from sixty days back to a hundred and twenty ahead, as one read-only agenda of busy time, into a calendar you choose. Each booking joins what Planity's own calendar export gives (the services, the prices, the cancellations, the recurring bookings) with what the salon's agenda gives (the client's name and phone, the note, the older bookings). You sign in with the salon's email and password and paste the calendar's web address (its export link, in Planity Pro's settings), which Sioul collects in its own form; only a refresh token and that address are kept, never the password. The clients seen in those appointments come too, with their phone and email address, into an address book you choose: Sioul only adds to it, and never deletes a card. Not Planity's: an independent, read-only client.", fr = "Les rendez-vous d’un salon Planity Pro, de soixante jours en arrière à cent vingt en avant, en un agenda en lecture seule de temps occupé, dans un calendrier que vous choisissez. Chaque réservation réunit ce que donne l’export de calendrier de Planity (les prestations, les prix, les annulations, les rendez-vous récurrents) et ce que donne l’agenda du salon (le nom et le téléphone du client, la note, les réservations plus anciennes). Vous vous connectez avec l’e-mail et le mot de passe du salon et collez l’adresse web du calendrier (son lien d’export, dans les réglages de Planity Pro), que Sioul recueille dans son propre formulaire ; seuls un jeton de renouvellement et cette adresse sont gardés, jamais le mot de passe. Les clients vus dans ces rendez-vous viennent aussi, avec leur téléphone et leur adresse e-mail, dans un carnet d’adresses que vous choisissez : Sioul ne fait qu’y ajouter, et ne supprime jamais une fiche. Pas celui de Planity : un client indépendant, en lecture seule." }
+brings = ["agenda", "contacts"]
+hosts = [
+    "identitytoolkit.googleapis.com",
+    "securetoken.googleapis.com",
+    "firestore.googleapis.com",
+    "product.api.euwest1.prod.planityapp.com",
+]
+credentials = ["email", "password", "web-address"]
+# Written at each release from the publisher's own build, signed only when the
+# automation's is the same (README.md); this hash is that of tools/build.sh with
+# Rust 1.99.0 at the commit that tags planity-0.2.0.
+file = "https://github.com/aurelienpierre/sioul-extensions/releases/download/planity-0.2.0/planity-0.2.0.wasm"
+sha256 = "3475d51d7b04ffa08bfe2142880db9e8817c1feb74235835b6c86aaea9671e48"
