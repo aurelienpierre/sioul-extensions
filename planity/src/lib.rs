@@ -110,7 +110,7 @@ impl Extension for Planity {
                 _ => return RefreshReply::problem(ProblemKind::SignIn, "the sign-in kept does not read"),
             },
             Ok(None) => return RefreshReply::problem(ProblemKind::SignIn, "no sign-in kept"),
-            Err(refused) => return RefreshReply { agendas: Vec::new(), problem: Some(Fault::from(refused).problem()) },
+            Err(refused) => return RefreshReply { problem: Some(Fault::from(refused).problem()), ..RefreshReply::default() },
         };
         read(host, kept, call.french())
     }
@@ -195,7 +195,7 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
         (Err(firestore), Err(feed)) => {
             // Both failed: the problem, as before; a sign-in to renew first.
             let problem = if firestore.problem().kind != ProblemKind::SignIn && feed.problem().kind == ProblemKind::SignIn { feed.problem() } else { firestore.problem() };
-            return RefreshReply { agendas: Vec::new(), problem: Some(problem) };
+            return RefreshReply { problem: Some(problem), ..RefreshReply::default() };
         }
         (firestore, feed) => (firestore, feed),
     };
@@ -238,7 +238,7 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
             Agenda { id: agenda_id(&id), name, calendar: text, period: period.clone(), unread: Vec::new(), busy: true }
         })
         .collect();
-    RefreshReply { agendas, problem }
+    RefreshReply { agendas, problem, ..RefreshReply::default() }
 }
 
 /// Mints a fresh id token (keeping a rotated refresh token) and reads the

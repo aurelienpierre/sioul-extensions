@@ -93,14 +93,14 @@ impl Extension for Skolengo {
                 Err(_) => return RefreshReply::problem(ProblemKind::SignIn, "the sign-in kept does not read"),
             },
             Ok(None) => return RefreshReply::problem(ProblemKind::SignIn, "no sign-in kept"),
-            Err(refused) => return RefreshReply { agendas: Vec::new(), problem: Some(Fault::from(refused).problem()) },
+            Err(refused) => return RefreshReply { problem: Some(Fault::from(refused).problem()), ..RefreshReply::default() },
         };
         let mut session = Session { host, kept, renewed: false };
         match session.refresh(call.french()) {
             Ok(reply) => reply,
             Err(fault) => {
                 session.host.log(&format!("refresh: {}", fault.detail()));
-                RefreshReply { agendas: Vec::new(), problem: Some(fault.problem()) }
+                RefreshReply { problem: Some(fault.problem()), ..RefreshReply::default() }
             }
         }
     }

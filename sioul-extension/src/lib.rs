@@ -8,7 +8,8 @@
 //!
 //! - **the calls** Sioul makes ([`Extension::sign_in`],
 //!   [`Extension::refresh`]) and their replies ([`SignInReply`],
-//!   [`RefreshReply`], an [`Agenda`], a [`Problem`]);
+//!   [`RefreshReply`], an [`Agenda`], a [`ContactSet`] of [`Contact`]s, a
+//!   [`Problem`]);
 //! - **what an extension may ask** Sioul, through a [`Host`]: a web request
 //!   ([`Request`], [`Answer`]), its own secret, a sign-in, the time, random
 //!   bytes, a line in its log, values to hide from that log;
@@ -311,16 +312,139 @@ pub struct Agenda {
     pub busy: bool,
 }
 
-/// The reply to a `refresh` call: the agendas, and a problem if there was one.
+/// The most sets of contacts a reply names. Past any of these bounds, counted
+/// before anything is written, Sioul refuses the whole reply.
+pub const MOST_SETS: usize = 8;
+/// The most people a set of contacts holds.
+pub const MOST_PEOPLE: usize = 20_000;
+/// The most characters a person's text holds once cleaned: an id, a name, a
+/// number, an address, an organisation.
+pub const MOST_TEXT: usize = 256;
+/// The most characters a person's note holds once cleaned.
+pub const MOST_NOTE: usize = 2_000;
+/// The most numbers, and the most e-mail addresses, a person holds.
+pub const MOST_VALUES: usize = 8;
+
+/// A set of contacts handed back (a business's clients). Sioul writes its
+/// people into the address book the person chooses for it in Settings ▸
+/// Extensions (nothing before one is chosen), each bound to a card of theirs
+/// by a number or an e-mail address, never by a name alone; it only adds to
+/// a card, and never deletes one: someone gone from the set keeps their card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ContactSet {
+    /// As an agenda's: lower-case letters, digits and `-`, 48 at most;
+    /// stable, since the person's choice of address book is kept by it.
+    pub id: String,
+    /// What the set is called, shown to the person beside its address book.
+    pub name: String,
+    /// Each person once ([`MOST_PEOPLE`] at most): an id twice is refused.
+    pub people: Vec<Contact>,
+}
+
+/// A person of a set of contacts. Only `id` and `name` are required; every
+/// other field is left out of the reply when empty. Each text is cleaned by
+/// Sioul (control characters and the marks that turn a line around taken
+/// out, on one line but the note) and bounded ([`MOST_TEXT`], [`MOST_NOTE`],
+/// [`MOST_VALUES`]): [`Contact::bounded`] does the same before the reply, so
+/// that one long text never costs the whole reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct Contact {
+    /// The service's own stable id for the person: Sioul marks their card
+    /// with a hash of it, so that the same card is found again at each
+    /// refresh. Never shown, never written as it is.
+    pub id: String,
+    /// The name as the service writes it ("Marie Exemple", "EXEMPLE Marie"):
+    /// the card's name, which follows the service while the person has not
+    /// renamed the card.
+    pub name: String,
+    /// The given and family names, only when the service keeps them apart:
+    /// the card's structured name. Sioul never guesses them from `name`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub given: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub family: String,
+    /// Phone numbers: proof that binds the person to a card already there
+    /// (equal once both are keyed), and added to their card when it lacks them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub phones: Vec<String>,
+    /// E-mail addresses: proof as the numbers are (equal whatever their
+    /// case), and added to the card when it lacks them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub emails: Vec<String>,
+    /// An organisation: written only on a card that has none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub org: String,
+    /// A note, the one text that may hold several lines: written only on a
+    /// card that has none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+/// A mark that turns a line around (U+202E and its kin), which Sioul takes out.
+fn direction(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// A text as Sioul cleans a person's: no control character (a new line kept
+/// when `lines`), no mark that turns a line around, trimmed.
+fn cleaned(text: &str, lines: bool) -> String {
+    let kept: String = text.chars().filter(|c| !(c.is_control() && !(lines && *c == '\n')) && !direction(*c)).collect();
+    kept.trim().to_string()
+}
+
+/// A shown text, cleaned and cut to `most` characters.
+fn cut(text: &str, most: usize, lines: bool) -> String {
+    let text = cleaned(text, lines);
+    if text.chars().count() <= most {
+        return text;
+    }
+    text.chars().take(most).collect::<String>().trim_end().to_string()
+}
+
+impl Contact {
+    /// The person as Sioul will read them, within its bounds: every text
+    /// cleaned as Sioul cleans it; a shown text (the name, the given and
+    /// family names, the organisation, the note) cut to its bound; a number
+    /// or an address longer than [`MOST_TEXT`] left out (a cut one is
+    /// another), as is an empty one, the first [`MOST_VALUES`] of each kept.
+    /// None when the id or the name is empty once cleaned, or the id longer
+    /// than its bound (a cut id could be another person's).
+    pub fn bounded(self) -> Option<Self> {
+        let id = cleaned(&self.id, false);
+        let name = cut(&self.name, MOST_TEXT, false);
+        if id.is_empty() || id.chars().count() > MOST_TEXT || name.is_empty() {
+            return None;
+        }
+        let values = |all: Vec<String>| -> Vec<String> { all.iter().map(|one| cleaned(one, false)).filter(|one| !one.is_empty() && one.chars().count() <= MOST_TEXT).take(MOST_VALUES).collect() };
+        Some(Self {
+            id,
+            name,
+            given: cut(&self.given, MOST_TEXT, false),
+            family: cut(&self.family, MOST_TEXT, false),
+            phones: values(self.phones),
+            emails: values(self.emails),
+            org: cut(&self.org, MOST_TEXT, false),
+            note: cut(&self.note, MOST_NOTE, true),
+        })
+    }
+}
+
+/// The reply to a `refresh` call: the agendas, the sets of contacts (left
+/// out of the JSON when there are none, as an extension that brings none
+/// says nothing of them), and a problem if there was one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct RefreshReply {
     pub agendas: Vec<Agenda>,
+    /// Only for an extension whose manifest says it brings `contacts`;
+    /// [`MOST_SETS`] at most.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactSet>,
     pub problem: Option<Problem>,
 }
 
 impl RefreshReply {
     pub fn problem(kind: ProblemKind, detail: impl Into<String>) -> Self {
-        Self { agendas: Vec::new(), problem: Some(Problem::new(kind, detail)) }
+        Self { problem: Some(Problem::new(kind, detail)), ..Self::default() }
     }
 }
 
@@ -433,7 +557,7 @@ mod tests {
 
         fn refresh(host: &mut dyn Host, _: &Call) -> RefreshReply {
             let now = host.now();
-            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), period: Some(Period::between(now - 86_400, now + 86_400)), unread: vec![Period::between(now, now + 86_400)], busy: false }], problem: None }
+            RefreshReply { agendas: vec![Agenda { id: "one".into(), name: "One".into(), calendar: String::new(), period: Some(Period::between(now - 86_400, now + 86_400)), unread: vec![Period::between(now, now + 86_400)], busy: false }], ..RefreshReply::default() }
         }
     }
 
@@ -449,10 +573,90 @@ mod tests {
         assert_eq!(reply["agendas"][0]["period"], json!({ "from": "2026-11-18T00:00:00Z", "until": "2026-11-20T00:00:00Z" }));
         assert_eq!(reply["agendas"][0]["busy"], json!(false), "the agenda carries its busy suggestion");
         assert_eq!(reply["problem"], Value::Null);
+        assert_eq!(reply.get("contacts"), None, "an extension that brings no contacts says nothing of them");
         for wrong in [&br#"{"interface":2,"call":"refresh"}"#[..], br#"{"interface":1,"call":"dance"}"#, b"not json"] {
             let reply: Value = serde_json::from_str(&run::<Echo>(&mut host, wrong)).unwrap();
             assert_eq!(reply["problem"]["kind"], "changed", "{}", String::from_utf8_lossy(wrong));
         }
+    }
+
+    #[test]
+    fn contacts_cross_as_the_cores_json() {
+        // The core's own example (Sioul's docs/extensions.md, "The calls", `refresh`), field for field;
+        // a person with an id and a name alone carries no other key.
+        let marie = Contact {
+            id: "client-41".into(),
+            name: "Marie Exemple".into(),
+            given: "Marie".into(),
+            family: "Exemple".into(),
+            phones: vec!["+33 1 23 45 67 89".into()],
+            emails: vec!["marie@example.org".into()],
+            org: "Exemple SARL".into(),
+            note: "Prefers mornings.".into(),
+        };
+        let jean = Contact { id: "client-42".into(), name: "Jean Exemple".into(), ..Contact::default() };
+        let reply = RefreshReply { contacts: vec![ContactSet { id: "clients".into(), name: "Clients".into(), people: vec![marie, jean] }], ..RefreshReply::default() };
+        assert_eq!(
+            serde_json::to_value(&reply).unwrap(),
+            json!({
+                "agendas": [],
+                "contacts": [
+                    {
+                        "id": "clients",
+                        "name": "Clients",
+                        "people": [
+                            {
+                                "id": "client-41",
+                                "name": "Marie Exemple",
+                                "given": "Marie",
+                                "family": "Exemple",
+                                "phones": ["+33 1 23 45 67 89"],
+                                "emails": ["marie@example.org"],
+                                "org": "Exemple SARL",
+                                "note": "Prefers mornings."
+                            },
+                            { "id": "client-42", "name": "Jean Exemple" }
+                        ]
+                    }
+                ],
+                "problem": null
+            })
+        );
+        // A set with nobody yet is still a set; no set at all is no key.
+        let empty = RefreshReply { contacts: vec![ContactSet { id: "clients".into(), name: "Clients".into(), people: Vec::new() }], ..RefreshReply::default() };
+        assert_eq!(serde_json::to_value(&empty).unwrap()["contacts"], json!([{ "id": "clients", "name": "Clients", "people": [] }]));
+        assert_eq!(serde_json::to_value(RefreshReply::default()).unwrap(), json!({ "agendas": [], "problem": null }));
+        assert_eq!(serde_json::to_value(RefreshReply::problem(ProblemKind::SignIn, "x")).unwrap().get("contacts"), None);
+    }
+
+    #[test]
+    fn a_contact_is_bounded_as_sioul_counts() {
+        let long = "é".repeat(MOST_TEXT + 40);
+        let person = Contact {
+            id: " C-1\u{202E} ".into(),
+            name: format!("\u{2066}Marie\u{0007} {long}"),
+            given: long.clone(),
+            family: "Exemple\n".into(),
+            phones: (0..10).map(|i| format!("+3312345678{i}")).chain(["   ".to_string(), "9".repeat(MOST_TEXT + 1)]).collect(),
+            emails: vec!["m".repeat(MOST_TEXT + 1), "marie@example.org\r\n".into()],
+            org: String::new(),
+            note: format!("Line one\r\nLine two\n{}", "n".repeat(MOST_NOTE)),
+        }
+        .bounded()
+        .unwrap();
+        assert_eq!(person.id, "C-1", "cleaned, trimmed, never cut");
+        assert!(person.name.starts_with("Marie é") && person.name.chars().count() == MOST_TEXT, "a long name is cut: {}", person.name.chars().count());
+        assert_eq!(person.given.chars().count(), MOST_TEXT);
+        assert_eq!(person.family, "Exemple", "one line");
+        assert_eq!(person.phones.len(), MOST_VALUES, "the first eight numbers");
+        assert_eq!(person.phones[0], "+33123456780");
+        assert_eq!(person.emails, vec!["marie@example.org".to_string()], "an address too long is left out, never cut into another");
+        assert!(person.note.starts_with("Line one\nLine two\nn") && person.note.chars().count() == MOST_NOTE, "the note keeps its lines, cut");
+        let base = || Contact { id: "c".into(), name: "N".into(), ..Contact::default() };
+        assert_eq!(Contact { id: "x".repeat(MOST_TEXT + 1), ..base() }.bounded(), None, "an id too long is never cut");
+        assert_eq!(Contact { id: "x".repeat(MOST_TEXT), ..base() }.bounded().map(|c| c.id.len()), Some(MOST_TEXT));
+        assert_eq!(Contact { name: "\u{202E}\u{0001} ".into(), ..base() }.bounded(), None, "no name left");
+        assert_eq!(Contact { id: "\t".into(), ..base() }.bounded(), None, "no id left");
     }
 
     #[test]
