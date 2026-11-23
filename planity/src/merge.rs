@@ -193,13 +193,17 @@ impl FeedBooking<'_> {
     fn updated(&self) -> Option<i64> {
         self.events.iter().filter_map(|e| e.updated).max()
     }
-    fn names(&self) -> Vec<(&str, Option<&str>)> {
-        // A name with its service id, when the event pairs them one to one.
+    /// Each service: its name, its id when the event pairs them one to one,
+    /// and the minutes of its own event when that event is of this service
+    /// alone (the live feed writes a booking of several services as one
+    /// event per service, each with its own times).
+    fn names(&self) -> Vec<(&str, Option<&str>, Option<i64>)> {
         self.events
             .iter()
             .flat_map(|e| {
                 let paired = e.service_ids.len() == e.service_names.len();
-                e.service_names.iter().enumerate().map(move |(i, name)| (name.as_str(), if paired { e.service_ids.get(i).map(String::as_str) } else { None }))
+                let own = (e.service_names.len() == 1 && !e.all_day).then(|| (e.end - e.start) / 60).filter(|m| *m > 0);
+                e.service_names.iter().enumerate().map(move |(i, name)| (name.as_str(), if paired { e.service_ids.get(i).map(String::as_str) } else { None }, own))
             })
             .collect()
     }
@@ -444,14 +448,15 @@ fn fill(booking: &mut Booking, fb: &FeedBooking, joined: &[&Appointment], consid
     let names = fb.names();
     let span = (!booking.all_day).then(|| (booking.end - booking.start) / 60).filter(|m| *m > 0);
     if !names.is_empty() {
+        // A service's minutes: its joined document's `d`, else its own event's span.
         let mut taken = vec![false; considered.len()];
-        for (name, id) in &names {
+        for (name, id, own) in &names {
             let minutes = id.and_then(|id| {
                 let at = considered.iter().enumerate().position(|(i, a)| !taken[i] && a.service.as_deref() == Some(id))?;
                 taken[at] = true;
                 Some(considered[at].minutes).filter(|m| *m > 0)
             });
-            booking.services.push(((*name).to_string(), minutes));
+            booking.services.push(((*name).to_string(), minutes.or(*own)));
         }
         if booking.services.len() == 1 && booking.services[0].1.is_none() {
             booking.services[0].1 = span;

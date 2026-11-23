@@ -14,7 +14,9 @@
 //! The recorded feed (`feed.ics`) and documents (`vevents.json`) hold, by id
 //! (`-Vinvented00000000NN`):
 //! - 01: one service; the feed's record fresher than Firestore's (which holds 14:00, not 14:30);
-//! - 02, 03, 04: one booking of three services (the feed's UID 03, its `sq` 02);
+//! - 02, 03, 04: one booking of three services, as the live feed writes it: three VEVENTs
+//!   (one per service, each its own UID and times, each listing the three ids), one `sq` 02;
+//!   Firestore's 03 says 35 minutes where the feed's event spans 30;
 //! - 05: cancelled in the feed, fresher than Firestore's live copy;
 //! - 06: moved to the next day and cancelled in Firestore, fresher than the feed;
 //! - 07: `DAILY;INTERVAL=7;UNTIL=…` with one `EXDATE`, the feed alone;
@@ -342,19 +344,27 @@ fn a_refresh_merges_both_sources_into_one_busy_agenda() {
 }
 
 #[test]
-fn a_booking_of_three_services_is_one_event_under_its_booking_key() {
+fn a_booking_of_three_services_is_one_event_with_each_services_minutes() {
     let mut host = stand_in(Scenario::default());
     signed_in(&mut host);
     let calendar = unfolded(&refresh(&mut host, "en")["agendas"][0]);
-    // The feed's UID is one of its appointments (03); the event is the booking's (02), once.
+    // The feed writes one VEVENT per service (02, 03, 04); the event is the booking's (its sq 02), once.
     let booking = vevent(&calendar, &v(2));
-    assert!(!calendar.contains(&format!("UID:{}\r\n", v(3))) && !calendar.contains(&format!("UID:{}\r\n", v(4))), "the services' documents are joined, not repeated");
+    assert!(!calendar.contains(&format!("UID:{}\r\n", v(3))) && !calendar.contains(&format!("UID:{}\r\n", v(4))), "the services are one booking, not repeated");
     assert!(has(&booking, &format!("SUMMARY:{MARIE} — Couleur\\, Coupe\\, Brushing")), "{booking}");
-    // 10:00–12:00 Paris in winter.
+    // 10:00–12:00 Paris in winter: the first service's start to the last's end.
     assert!(has(&booking, "DTSTART:20261202T090000Z") && has(&booking, "DTEND:20261202T110000Z"), "{booking}");
-    // Each service with its minutes from its own document, the feed's total price, prepaid, the phone.
-    assert!(booking.contains("DESCRIPTION:Couleur (60 min)\\nCoupe (30 min)\\nBrushing (30 min)\\n120\\,00\u{a0}€\\nPrepaid\\n+33123456789\r\n"), "{booking}");
+    // Joined, each service's minutes are its document's `d` (Coupe: 35, where the feed spans 30);
+    // the feed's prices added, prepaid, the phone.
+    assert!(booking.contains("DESCRIPTION:Couleur (60 min)\\nCoupe (35 min)\\nBrushing (30 min)\\n120\\,00\u{a0}€\\nPrepaid\\n+33123456789\r\n"), "{booking}");
     assert!(has(&booking, "STATUS:CONFIRMED"));
+    // The feed alone: each service's minutes are its own VEVENT's span.
+    let mut host = stand_in(Scenario::default());
+    host.secret = Some(json!({ "b": BUSINESS, "l": link() }).to_string());
+    let calendar = unfolded(&refresh(&mut host, "en")["agendas"][0]);
+    let booking = vevent(&calendar, &v(2));
+    assert!(booking.contains("DESCRIPTION:Couleur (60 min)\\nCoupe (30 min)\\nBrushing (30 min)\\n120\\,00\u{a0}€\\nPrepaid\r\n"), "{booking}");
+    assert!(has(&booking, "DTSTART:20261202T090000Z") && has(&booking, "DTEND:20261202T110000Z"), "{booking}");
 }
 
 #[test]
