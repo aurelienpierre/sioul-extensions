@@ -574,6 +574,8 @@ fn event(lesson: &Value) -> Option<Event> {
         // A pupil's lesson is not the time of the person who reads it (a parent).
         transparent: true,
         all_day: false,
+        categories: Vec::new(),
+        person: None,
     })
 }
 

@@ -26,6 +26,66 @@ pub struct Event {
     /// `end` are UTC midnight of the civil date(s) (`days(y, m, d) * 86_400`):
     /// the day is read from them, never a wall-clock time.
     pub all_day: bool,
+    /// Its own categories (a salon's services: "Coupe", "Couleur"): Sioul
+    /// writes them after the extension's own category, on one `CATEGORIES`
+    /// line. Each written once (case aside), cleaned and cut as Sioul counts
+    /// them ([`crate::MOST_TEXT`]), the first [`crate::MOST_CATEGORIES`]
+    /// alone; a comma inside one is escaped, never a second category. A Sioul
+    /// before them writes the extension's category alone.
+    pub categories: Vec<String>,
+    /// The person it is with, among the people of a set of contacts the same
+    /// reply hands back: Sioul ties the event to that person's card
+    /// (`CONTACT;ALTREP="urn:uuid:<the card's UID>"`). Never written as it is
+    /// anywhere: Sioul reads the line and writes the card's UID. A Sioul
+    /// before it drops the line, as every `X-` line.
+    pub person: Option<PersonRef>,
+}
+
+/// A person of a set of contacts, as an event names them: the set's id
+/// ([`crate::ContactSet::id`]) and the person's ([`crate::Contact::id`]),
+/// exactly as the set hands them back (Sioul cleans both the same way).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonRef {
+    pub set: String,
+    pub id: String,
+}
+
+/// The line that names the person an event is with: Sioul's interface, read
+/// by Sioul and never kept (`docs/extensions.md`, "What it hands back: an agenda").
+pub const PERSON_LINE: &str = "X-SIOUL-PERSON";
+/// Its parameter naming the set.
+pub const SET_PARAMETER: &str = "X-SIOUL-SET";
+
+/// Whether `id` may name a set (as an agenda's): lower-case letters, digits
+/// and `-`, 48 at most, not beginning with `-`.
+fn set_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 48 && !id.starts_with('-') && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+impl Event {
+    /// Its categories as written: each cleaned and cut as Sioul counts them,
+    /// empty ones left out, each once whatever its case, the first
+    /// [`crate::MOST_CATEGORIES`].
+    fn own_categories(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for name in &self.categories {
+            let name = crate::cut(name, crate::MOST_TEXT, false);
+            if !name.is_empty() && !out.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+                out.push(name);
+            }
+        }
+        out.truncate(crate::MOST_CATEGORIES);
+        out
+    }
+
+    /// The person's line, when the person is one Sioul reads: a set's id that
+    /// is one, and a person's id, once cleaned, neither empty nor longer than
+    /// [`crate::MOST_TEXT`] (a set would not hold them: [`crate::Contact::bounded`]).
+    fn person_line(&self) -> Option<String> {
+        let person = self.person.as_ref()?;
+        let id = crate::cleaned(&person.id, false);
+        (set_id(&person.set) && !id.is_empty() && id.chars().count() <= crate::MOST_TEXT).then(|| format!("{PERSON_LINE};{SET_PARAMETER}={}:{}", person.set, escape(&id)))
+    }
 }
 
 /// An agenda's events, and the program that wrote them.
@@ -71,6 +131,13 @@ impl Calendar {
             line(format!("STATUS:{}", if event.cancelled { "CANCELLED" } else { "CONFIRMED" }));
             if event.transparent {
                 line("TRANSP:TRANSPARENT".into());
+            }
+            let categories = event.own_categories();
+            if !categories.is_empty() {
+                line(format!("CATEGORIES:{}", categories.iter().map(|c| escape(c)).collect::<Vec<_>>().join(",")));
+            }
+            if let Some(person) = event.person_line() {
+                line(person);
             }
             line("END:VEVENT".into());
         }
@@ -174,6 +241,8 @@ mod tests {
                 cancelled: true,
                 transparent: true,
                 all_day: false,
+                categories: Vec::new(),
+                person: None,
             }],
         };
         let text = calendar.text();
@@ -197,13 +266,48 @@ mod tests {
         let calendar = Calendar {
             product: "test 0.1.0".into(),
             name: "Planity".into(),
-            events: vec![Event { uid: "B-1".into(), start: day, end: day + 86_400, summary: "Unavailable".into(), location: None, description: None, cancelled: false, transparent: false, all_day: true }],
+            events: vec![Event { uid: "B-1".into(), start: day, end: day + 86_400, summary: "Unavailable".into(), location: None, description: None, cancelled: false, transparent: false, all_day: true, categories: Vec::new(), person: None }],
         };
         let text = calendar.text();
         assert!(text.contains("DTSTART;VALUE=DATE:20261125\r\n"), "{text}");
         assert!(text.contains("DTEND;VALUE=DATE:20261126\r\n"), "the day after the last: {text}");
         assert!(text.contains("DTSTAMP:20261125T000000Z\r\n"), "{text}");
         assert!(!text.contains("TRANSP:"), "a busy event writes no TRANSP; the door decides: {text}");
+    }
+
+    /// An event's own categories (invented services) on one `CATEGORIES`
+    /// line, a comma inside one escaped, each once, within Sioul's bounds;
+    /// the person it is with as Sioul reads them, only when Sioul would.
+    #[test]
+    fn an_event_s_categories_and_person_are_written_as_sioul_reads_them() {
+        let event = |categories: Vec<String>, person: Option<PersonRef>| Calendar {
+            product: "test 0.1.0".into(),
+            name: "Salon".into(),
+            events: vec![Event { uid: "B-1".into(), start: 1_795_075_200, end: 1_795_078_800, summary: "Marie Exemple — Coupe".into(), location: None, description: None, cancelled: false, transparent: false, all_day: false, categories, person }],
+        }
+        .text()
+        .replace("\r\n ", "");
+        let names = |all: &[&str]| all.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let marie = || Some(PersonRef { set: "clients".into(), id: "client-41".into() });
+        let text = event(names(&["Coupe", "Couleur, mèches", " coupe ", "", "Brushing\u{202E}"]), marie());
+        assert!(text.contains("CATEGORIES:Coupe,Couleur\\, mèches,Brushing\r\n"), "one line, each once, a comma escaped:\n{text}");
+        assert_eq!(text.matches("CATEGORIES").count(), 1);
+        assert!(text.contains("X-SIOUL-PERSON;X-SIOUL-SET=clients:client-41\r\n"), "{text}");
+        // None given: no line at all, as before.
+        let bare = event(Vec::new(), None);
+        assert!(!bare.contains("CATEGORIES") && !bare.contains("X-SIOUL"), "{bare}");
+        // Within Sioul's bounds: the first sixteen, each cut to its length.
+        let many: Vec<String> = (0..20).map(|i| format!("Service {i}")).chain([format!("{}", "s".repeat(crate::MOST_TEXT + 10))]).collect();
+        let bounded = event(many, None);
+        let line = bounded.lines().find(|l| l.starts_with("CATEGORIES:")).unwrap();
+        assert_eq!(line.matches(',').count(), crate::MOST_CATEGORIES - 1, "{line}");
+        let long = event(vec!["s".repeat(crate::MOST_TEXT + 10)], None);
+        assert!(long.contains(&format!("CATEGORIES:{}\r\n", "s".repeat(crate::MOST_TEXT))), "cut as Sioul counts");
+        // An id escaped as a text; one Sioul would not read is not written.
+        assert!(event(Vec::new(), Some(PersonRef { set: "clients".into(), id: "a,b;c".into() })).contains("X-SIOUL-PERSON;X-SIOUL-SET=clients:a\\,b\\;c\r\n"));
+        for (set, id) in [("Clients", "client-41"), ("clients", " \u{202E} "), ("clients", &"x".repeat(crate::MOST_TEXT + 1)), ("-clients", "c")] {
+            assert!(!event(Vec::new(), Some(PersonRef { set: set.into(), id: id.to_string() })).contains("X-SIOUL"), "{set} {id}");
+        }
     }
 
     #[test]

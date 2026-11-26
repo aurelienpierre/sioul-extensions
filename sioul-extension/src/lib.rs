@@ -13,7 +13,8 @@
 //! - **what an extension may ask** Sioul, through a [`Host`]: a web request
 //!   ([`Request`], [`Answer`]), its own secret, a sign-in, the time, random
 //!   bytes, a line in its log, values to hide from that log;
-//! - **an iCalendar writer** ([`ical`]) for the agenda it hands back;
+//! - **an iCalendar writer** ([`ical`]) for the agenda it hands back, each
+//!   event with its own categories and the person it is with, when it has them;
 //! - **the plumbing**: JSON through the module's memory ([`export!`] makes the
 //!   three exports Sioul runs), on `wasm32` only. On a computer the same code
 //!   runs against a stand-in host ([`standin`]), for tests on recorded answers.
@@ -294,8 +295,11 @@ pub struct Agenda {
     pub id: String,
     pub name: String,
     /// iCalendar text, events only ([`ical::Calendar::text`]): each with a
-    /// UID of its own, the same at every refresh; no category (Sioul adds
-    /// the extension's name).
+    /// UID of its own, the same at every refresh. Sioul writes the
+    /// extension's name as each event's first category; an event's own
+    /// categories ([`ical::Event::categories`], a salon's services) come after
+    /// it. An event may name the person of a set of contacts it is with
+    /// ([`ical::Event::person`]): Sioul ties it to that person's card.
     pub calendar: String,
     /// The period this answer read, its unread days aside: what Sioul holds
     /// of this agenda there and no longer finds in it is removed. None:
@@ -324,6 +328,10 @@ pub const MOST_TEXT: usize = 256;
 pub const MOST_NOTE: usize = 2_000;
 /// The most numbers, and the most e-mail addresses, a person holds.
 pub const MOST_VALUES: usize = 8;
+/// The most categories of its own an event holds, each [`MOST_TEXT`]
+/// characters at most once cleaned: past either, Sioul refuses the whole reply
+/// ([`ical::Event::categories`] keeps within them).
+pub const MOST_CATEGORIES: usize = 16;
 
 /// A set of contacts handed back (a business's clients). Sioul writes its
 /// people into the address book the person chooses for it in Settings ▸

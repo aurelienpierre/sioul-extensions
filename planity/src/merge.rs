@@ -18,11 +18,16 @@
 //! - **Maps from everything read**: a client id to the client's name and
 //!   phone (the documents' `cu`), a service id to its name (the feed's), so
 //!   that a booking only one source holds is named too.
+//! - **Its services as categories, its client as the person it is with**:
+//!   each service's name is one of the event's own categories (Sioul writes
+//!   them after "Planity"), and a named client is the person of the set of
+//!   clients the event is with (`clients::SET_ID` and their id), which Sioul
+//!   ties to their card.
 
 use crate::feed::{self, Expansion, Feed, FeedEvent};
 use crate::planityapi::Document;
 use serde_json::Value;
-use sioul_extension::ical::{self, Event};
+use sioul_extension::ical::{self, Event, PersonRef};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A whole day of minutes (an all-day block is `d` ≈ 1439).
@@ -120,8 +125,15 @@ struct Booking {
     phone: Option<String>,
     /// A client is named by id, whether or not their name is known.
     has_client: bool,
+    /// The client's id (`cu.id`, the feed's `cuId`), the one the set of
+    /// clients holds them by (`clients::set`).
+    client_id: Option<String>,
     /// Each service, with its minutes when known.
     services: Vec<(String, Option<i64>)>,
+    /// The names of its services as Planity names them (the feed's
+    /// `X-SERVICE-NAME`, else the feed's map of a document's service id):
+    /// the event's own categories. Never a block's title.
+    categories: Vec<String>,
     price: Option<i64>,
     prepaid: bool,
     booked_online: bool,
@@ -174,6 +186,10 @@ impl Booking {
             // The agenda declares busy; the door writes the transparency from the person's choice.
             transparent: false,
             all_day: self.all_day,
+            categories: self.categories.clone(),
+            // The client the appointment is with, when the set of clients holds them (named):
+            // Sioul ties the event to their card.
+            person: self.client.as_ref().and(self.client_id.as_ref()).map(|id| PersonRef { set: crate::clients::SET_ID.into(), id: id.clone() }),
         }
     }
 }
@@ -446,6 +462,7 @@ fn fill(booking: &mut Booking, fb: &FeedBooking, joined: &[&Appointment], consid
     booking.client = source.and_then(|a| a.client_name.clone());
     booking.phone = source.and_then(|a| a.phone.clone()).or_else(|| joined.iter().find_map(|a| a.phone.clone()));
     booking.has_client = feed_client.is_some() || joined.iter().any(|a| a.client_id.is_some());
+    booking.client_id = source.and_then(|a| a.client_id.clone());
 
     // The services: the feed's names, else its summary without the calendar's name, else the map.
     let names = fb.names();
@@ -460,6 +477,7 @@ fn fill(booking: &mut Booking, fb: &FeedBooking, joined: &[&Appointment], consid
                 Some(considered[at].minutes).filter(|m| *m > 0)
             });
             booking.services.push(((*name).to_string(), minutes.or(*own)));
+            booking.categories.push((*name).to_string());
         }
         if booking.services.len() == 1 && booking.services[0].1.is_none() {
             booking.services[0].1 = span;
@@ -470,6 +488,7 @@ fn fill(booking: &mut Booking, fb: &FeedBooking, joined: &[&Appointment], consid
         for appointment in considered {
             if let Some(name) = appointment.service.as_deref().and_then(|id| services.get(id)) {
                 booking.services.push(((*name).to_string(), Some(appointment.minutes).filter(|m| *m > 0 && !appointment.all_day)));
+                booking.categories.push((*name).to_string());
             }
         }
     }

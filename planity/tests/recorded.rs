@@ -1065,3 +1065,43 @@ fn one_clients_json_is_the_shape_sioul_reads() {
     );
     assert_eq!(reply.as_object().unwrap().keys().collect::<Vec<_>>(), vec!["agendas", "contacts", "problem"]);
 }
+
+/// Each appointment says its services as categories of its own (one line, as
+/// Sioul writes them after "Planity") and the client it is with, by the id
+/// the set of clients holds them by, which Sioul ties to their card; a block
+/// says neither; a title that is no service is no category; without
+/// Firestore's answer (no set of clients) no person is named, and the log
+/// never names a client's id.
+#[test]
+fn each_appointment_names_its_services_and_its_client() {
+    let mut host = stand_in(Scenario::default());
+    signed_in(&mut host);
+    let reply = refresh(&mut host, "en");
+    let calendar = unfolded(&reply["agendas"][0]);
+    let held: Vec<&str> = reply["contacts"][0]["people"].as_array().unwrap().iter().filter_map(|p| p["id"].as_str()).collect();
+    // 02: three services, one booking; Marie, whom the set holds.
+    let booking = vevent(&calendar, &v(2));
+    assert!(has(&booking, "CATEGORIES:Couleur,Coupe,Brushing"), "{booking}");
+    assert!(has(&booking, &format!("X-SIOUL-PERSON;X-SIOUL-SET=clients:{MARIE_ID}")) && held.contains(&MARIE_ID), "{booking}");
+    // 05: Paul, cancelled in the feed: still Paul's appointment, its service kept.
+    let five = vevent(&calendar, &v(5));
+    assert!(has(&five, "CATEGORIES:Soin visage") && has(&five, &format!("X-SIOUL-PERSON;X-SIOUL-SET=clients:{PAUL_ID}")) && held.contains(&PAUL_ID), "{five}");
+    // 11: Firestore alone, its service named by the feed's map.
+    assert!(has(&vevent(&calendar, &v(11)), "CATEGORIES:Coupe"));
+    // 12, Firestore's all-day block, and 09, the feed's: no service, no client; a block's title is no category.
+    for block in [v(12), v(9)] {
+        let event = vevent(&calendar, &block);
+        assert!(!event.contains("CATEGORIES") && !event.contains("X-SIOUL-PERSON"), "{event}");
+    }
+    // 08: a series with no client: its service, no person.
+    let series = vevents(&calendar).into_iter().find(|(uid, _)| uid.starts_with(&format!("{}-", v(8)))).unwrap().1;
+    assert!(series.contains("CATEGORIES:") && !series.contains("X-SIOUL-PERSON"), "{series}");
+    assert!(!host.log_shows(MARIE_ID) && !host.log_shows(PAUL_ID), "{:?}", host.log);
+    // The feed alone: the services still, nobody named (no set of clients comes back).
+    let mut host = stand_in(Scenario::default());
+    host.secret = Some(json!({ "b": BUSINESS, "l": link() }).to_string());
+    let reply = refresh(&mut host, "en");
+    let calendar = unfolded(&reply["agendas"][0]);
+    assert!(has(&vevent(&calendar, &v(2)), "CATEGORIES:Couleur,Coupe,Brushing") && !calendar.contains("X-SIOUL-PERSON"), "{calendar}");
+    assert_eq!(reply.get("contacts"), None);
+}
