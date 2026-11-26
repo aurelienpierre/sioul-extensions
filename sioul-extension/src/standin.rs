@@ -22,6 +22,8 @@ pub struct StandIn {
     /// Every request made, in order.
     pub asked: Vec<Request>,
     pub secret: Option<String>,
+    /// The keyring refuses with this word (`keyring`): its secret neither read nor kept.
+    pub secret_refused: Option<String>,
     /// What the person does on the sign-in page; none: `page` says, or no sign-in may be asked.
     pub sign_in: Option<SignIn>,
     /// What the person does on the page opened, given its address (a return that carries its `state`).
@@ -37,7 +39,7 @@ pub struct StandIn {
 impl StandIn {
     /// A stand-in at `now`, whose web answers nothing (status 0 would not read: every request is refused).
     pub fn new(now: i64) -> Self {
-        Self { now, hosts: Vec::new(), web: Box::new(|_| Answer::new(599, "")), asked: Vec::new(), secret: None, sign_in: None, page: None, drawn: 0, opened: Vec::new(), log: Vec::new(), hidden: Vec::new() }
+        Self { now, hosts: Vec::new(), web: Box::new(|_| Answer::new(599, "")), asked: Vec::new(), secret: None, secret_refused: None, sign_in: None, page: None, drawn: 0, opened: Vec::new(), log: Vec::new(), hidden: Vec::new() }
     }
 
     /// Whether a value the extension hid shows in the log.
@@ -88,10 +90,16 @@ impl Host for StandIn {
     }
 
     fn secret(&mut self) -> Result<Option<String>, Refused> {
+        if let Some(why) = &self.secret_refused {
+            return forms::secret_answer(&json!({ "refused": why }));
+        }
         forms::secret_answer(&json!({ "secret": self.secret }))
     }
 
     fn keep_secret(&mut self, secret: &str) -> Result<(), Refused> {
+        if let Some(why) = &self.secret_refused {
+            return forms::done(&json!({ "refused": why }));
+        }
         if secret.len() > 2400 {
             return forms::done(&json!({ "refused": "size" }));
         }

@@ -73,52 +73,77 @@ const DEFAULT_NAME: &str = "Planity";
 
 impl Extension for Planity {
     fn sign_in(host: &mut dyn Host, call: &Call) -> SignInReply {
-        let Some(credentials) = call.credentials.as_ref() else {
-            return SignInReply::Problem(Problem::new(ProblemKind::SignIn, "no credentials were given"));
-        };
-        let present = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
-        let (Some(email), Some(password), Some(address)) = (present(&credentials.email), present(&credentials.password), present(&credentials.web_address)) else {
-            return SignInReply::Problem(Problem::new(ProblemKind::SignIn, "an email, a password and the calendar's web address are needed"));
-        };
-        // Defensive: never let a credential reach the log, even though Sioul already hides them.
-        host.hide(&[&email, &password, &address]);
-        // The link is checked before anything is asked of the network.
-        let link = match Link::read(&address) {
-            Ok(link) => link,
-            Err(why) => {
-                host.log(&format!("sign-in: {why}"));
-                return SignInReply::Problem(Problem::new(ProblemKind::SignIn, why));
-            }
-        };
-        host.hide(&[&link.key, &link.address]);
-        let signed = planityapi::sign_in(host, &email, &password).and_then(|(refresh, business)| {
-            if business != link.business {
-                return Err(Fault::SignIn("the web address is another business's calendar".into()));
-            }
-            keep(host, &Kept { r: Some(refresh), b: business, l: Some(link.address.clone()) })
-        });
+        let signed = signed_in(host, call);
+        match &signed {
+            Ok(()) => host.log("sign-in: signed in to Planity; the sign-in is kept on this device"),
+            Err(fault) => host.log(&format!("sign-in: {}", fault.detail())),
+        }
         match signed {
-            Ok(()) => {
-                host.log("signed in to Planity");
-                SignInReply::SignedIn
-            }
-            Err(fault) => {
-                host.log(&format!("sign-in: {}", fault.detail()));
-                SignInReply::Problem(fault.problem())
-            }
+            Ok(()) => SignInReply::SignedIn,
+            Err(fault) => SignInReply::Problem(fault.problem()),
         }
     }
 
     fn refresh(host: &mut dyn Host, call: &Call) -> RefreshReply {
-        let kept = match host.secret() {
-            Ok(Some(text)) => match serde_json::from_str::<Kept>(&text).map(Kept::trimmed) {
-                Ok(kept) if kept.r.is_some() || kept.l.is_some() => kept,
-                _ => return RefreshReply::problem(ProblemKind::SignIn, "the sign-in kept does not read"),
-            },
-            Ok(None) => return RefreshReply::problem(ProblemKind::SignIn, "no sign-in kept"),
-            Err(refused) => return RefreshReply { problem: Some(Fault::from(refused).problem()), ..RefreshReply::default() },
+        let kept = match kept(host) {
+            Ok(kept) => kept,
+            Err(fault) => {
+                host.log(&format!("refresh: {}", fault.detail()));
+                return RefreshReply { problem: Some(fault.problem()), ..RefreshReply::default() };
+            }
         };
         read(host, kept, call.french())
+    }
+}
+
+/// The fields of the form, checked (which one is empty or malformed, never
+/// its value), the link checked, then the sign-in's three steps, the business
+/// compared, and what is kept, kept.
+fn signed_in(host: &mut dyn Host, call: &Call) -> Result<(), Fault> {
+    let credentials = call.credentials.as_ref().ok_or_else(|| Fault::SignIn("the form: no credentials reached the extension".into()))?;
+    // Sioul takes out the spaces a phone's keyboard adds around an email or a link; so does
+    // this, for an older Sioul. A password is taken exactly as typed: a space may be part of it.
+    let trimmed = |value: &Option<String>| value.as_deref().map(str::trim).unwrap_or("").to_string();
+    let (email, address) = (trimmed(&credentials.email), trimmed(&credentials.web_address));
+    let password = credentials.password.clone().unwrap_or_default();
+    // Defensive: never let a credential reach the log, even though Sioul already hides them.
+    host.hide(&[&email, &password, &address]);
+    let empty: Vec<&str> = [("email", email.is_empty()), ("password", password.is_empty()), ("web address", address.is_empty())].iter().filter(|(_, empty)| *empty).map(|(name, _)| *name).collect();
+    match empty.as_slice() {
+        [] => {}
+        [one] => return Err(Fault::SignIn(format!("the form: the {one} field is empty"))),
+        several => return Err(Fault::SignIn(format!("the form: the {} fields are empty", several.join(" and ")))),
+    }
+    if !email.contains('@') || email.contains(char::is_whitespace) {
+        return Err(Fault::SignIn("the form: the email field does not hold an address (no @, or a space inside)".into()));
+    }
+    // The link is checked before anything is asked of the network.
+    let link = Link::read(&address).map_err(|why| Fault::SignIn(format!("the form: {why}")))?;
+    host.hide(&[&link.key, &link.address, &link.business, &link.calendar]);
+    host.log("sign-in: the form's three fields read, the calendar's web address is Planity's export");
+    let (refresh, business) = planityapi::sign_in(host, &email, &password)?;
+    if business != link.business {
+        return Err(Fault::SignIn("the form: the web address is another business's calendar than the account's".into()));
+    }
+    keep(host, &Kept { r: Some(refresh), b: business, l: Some(link.address.clone()) })
+}
+
+/// The sign-in kept on this device, read: "no sign-in kept on this device"
+/// (none in its keyring: a sign-in made on another device is not shared),
+/// "the sign-in kept here does not read" (not what this extension keeps), or
+/// "the keyring did not answer", each its own problem.
+fn kept(host: &mut dyn Host) -> Result<Kept, Fault> {
+    match host.secret() {
+        Ok(Some(text)) => match serde_json::from_str::<Kept>(&text).map(Kept::trimmed) {
+            Ok(kept) if kept.r.is_some() || kept.l.is_some() => {
+                host.log(&format!("refresh: the sign-in kept here read ({}{})", if kept.r.is_some() { "a refresh token" } else { "no refresh token" }, if kept.l.is_some() { ", the calendar's link" } else { ", no calendar link" }));
+                Ok(kept)
+            }
+            Ok(_) => Err(Fault::SignIn("the sign-in kept here does not read: it holds neither a refresh token nor the calendar's link; sign in again".into())),
+            Err(_) => Err(Fault::SignIn(format!("the sign-in kept here does not read: its {} bytes are not what this extension keeps; sign in again", text.len()))),
+        },
+        Ok(None) => Err(Fault::SignIn("no sign-in kept on this device: sign in on this device (a sign-in made on another device stays there)".into())),
+        Err(refused) => Err(Fault::Unreachable(format!("the keyring did not answer when the sign-in kept here was read (Sioul refused: {})", refused.0))),
     }
 }
 
@@ -151,9 +176,12 @@ impl Kept {
 fn keep(host: &mut dyn Host, kept: &Kept) -> Result<(), Fault> {
     let text = serde_json::to_string(kept).unwrap_or_default();
     if text.len() > KEPT_BYTES {
-        return Err(Fault::SignIn("the sign-in is longer than the keyring keeps".into()));
+        return Err(Fault::SignIn(format!("the sign-in to keep weighs {} bytes, more than the keyring keeps ({KEPT_BYTES})", text.len())));
     }
-    host.keep_secret(&text).map_err(Fault::from)
+    host.keep_secret(&text).map_err(|refused| match refused.0.as_str() {
+        "keyring" => Fault::Unreachable("the keyring did not answer when the sign-in was kept (Sioul refused: keyring)".into()),
+        why => Fault::Changed(format!("the sign-in could not be kept (Sioul refused: {why})")),
+    })
 }
 
 // ---------------------------------------------------------------- the refresh
@@ -172,10 +200,15 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
     }
     let link = kept.l.as_deref().map(Link::read);
     if let Some(Ok(link)) = &link {
-        host.hide(&[&link.key]);
+        host.hide(&[&link.key, &link.business, &link.calendar]);
         if kept.b.is_empty() {
             kept.b = link.business.clone();
         }
+    }
+    // The business's id names it in Firestore's path, which Sioul's line of each request shows.
+    if !kept.b.is_empty() {
+        let business = kept.b.clone();
+        host.hide(&[&business]);
     }
 
     let zone = jiff::tz::db().get(ZONE).unwrap_or(TimeZone::UTC);
@@ -190,9 +223,9 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
     }
     // The feed half.
     let feed = match &link {
-        None => Err(Fault::SignIn("no calendar web address kept".into())),
-        Some(Err(why)) => Err(Fault::SignIn((*why).into())),
-        Some(Ok(link)) => planityapi::read_feed(host, link).and_then(|text| feed::read(&text).ok_or_else(|| Fault::Changed("the calendar feed is not an iCalendar".into()))),
+        None => Err(Fault::SignIn("no calendar web address kept on this device: sign in again with it".into())),
+        Some(Err(why)) => Err(Fault::SignIn(format!("the calendar web address kept here: {why}; sign in again with it"))),
+        Some(Ok(link)) => planityapi::read_feed(host, link).and_then(|text| feed::read(&text).ok_or_else(|| Fault::Changed(format!("{} answered HTTP 200 with what is not an iCalendar", planityapi::FEED_STEP)))),
     };
     match &feed {
         Ok(feed) => host.log(&format!("refresh: {} event(s) from the feed, {} that do not read", feed.events.len(), feed.skipped)),
@@ -264,9 +297,9 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
 /// Mints a fresh id token (keeping a rotated refresh token) and reads the
 /// window's appointment documents.
 fn firestore(host: &mut dyn Host, kept: &mut Kept, zone: &TimeZone, from_ts: i64, until_ts: i64) -> Result<Vec<merge::Appointment>, Fault> {
-    let refresh = kept.r.clone().ok_or_else(|| Fault::SignIn("no Firebase sign-in kept".into()))?;
+    let refresh = kept.r.clone().ok_or_else(|| Fault::SignIn("no Firebase sign-in kept on this device (only the calendar's link): sign in again".into()))?;
     if kept.b.is_empty() {
-        return Err(Fault::SignIn("no business kept".into()));
+        return Err(Fault::SignIn("no business kept on this device: sign in again".into()));
     }
     let (id_token, rotated) = planityapi::mint(host, &refresh)?;
     host.hide(&[&id_token]);
@@ -274,6 +307,7 @@ fn firestore(host: &mut dyn Host, kept: &mut Kept, zone: &TimeZone, from_ts: i64
         host.hide(&[&new_refresh]);
         kept.r = Some(new_refresh);
         keep(host, kept)?;
+        host.log("refresh: the new refresh token kept on this device");
     }
     let from = local_string(from_ts, zone)?;
     let until = local_string(until_ts, zone)?;
@@ -287,7 +321,7 @@ fn firestore(host: &mut dyn Host, kept: &mut Kept, zone: &TimeZone, from_ts: i64
 
 /// Seconds since 1970 (UTC) as a Europe/Paris wall-clock string `"YYYY-MM-DD HH:MM"`.
 fn local_string(at: i64, zone: &TimeZone) -> Result<String, Fault> {
-    let instant = Timestamp::from_second(at).map_err(|_| Fault::Changed("the time is out of range".into()))?;
+    let instant = Timestamp::from_second(at).map_err(|_| Fault::Changed(format!("the time {at} given by Sioul is out of range")))?;
     Ok(instant.to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M").to_string())
 }
 
@@ -334,22 +368,23 @@ fn agenda_id(calendar: &str) -> String {
 
 // ---------------------------------------------------------------- what went wrong
 
-/// What went wrong, before it is a problem said to Sioul.
+/// What went wrong, before it is a problem said to Sioul: its kind, and its
+/// detail, which names the step (the form, the password sign-in, the token's
+/// renewal, Firestore, the feed, the keyring), the HTTP status and the
+/// service's own code when there is one, and the cause in words; never a
+/// value (a password, a token, the link or its key).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Fault {
     SignIn(String),
     Unreachable(String),
     Refused(String),
     Changed(String),
-    /// A status the extension did not expect.
-    Status(u16, String),
 }
 
 impl Fault {
     pub(crate) fn detail(&self) -> String {
         match self {
             Self::SignIn(d) | Self::Unreachable(d) | Self::Refused(d) | Self::Changed(d) => d.clone(),
-            Self::Status(status, d) => format!("{d}: {status}"),
         }
     }
 
@@ -359,23 +394,17 @@ impl Fault {
             Self::Unreachable(_) => ProblemKind::Unreachable,
             Self::Refused(_) => ProblemKind::Refused,
             Self::Changed(_) => ProblemKind::Changed,
-            Self::Status(401, _) => ProblemKind::SignIn,
-            Self::Status(403, _) => ProblemKind::Refused,
-            Self::Status(status, _) if *status >= 500 => ProblemKind::Unreachable,
-            Self::Status(_, _) => ProblemKind::Changed,
         };
         Problem::new(kind, self.detail())
     }
-}
 
-/// Sioul's refusal of an ask: a host or an address it would not reach means
-/// Planity moved (an update is needed); the network or a limit, that it could
-/// not be reached now.
-impl From<Refused> for Fault {
-    fn from(refused: Refused) -> Self {
-        let detail = format!("Sioul refused: {}", refused.0);
+    /// Sioul's refusal of `step`'s request: the network, the time or the
+    /// count, that it could not be reached now; a host or an address it
+    /// would not reach, that Planity moved (an update is needed).
+    pub(crate) fn refused_at(step: &str, refused: &Refused) -> Self {
+        let detail = format!("{step} could not be asked: Sioul refused it ({})", refused.0);
         match refused.0.as_str() {
-            "network" | "time" | "keyring" | "count" => Self::Unreachable(detail),
+            "network" | "time" | "count" => Self::Unreachable(detail),
             _ => Self::Changed(detail),
         }
     }

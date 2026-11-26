@@ -85,7 +85,12 @@ pub fn alloc(len: i32) -> i32 {
 }
 
 /// `sioul_call`: the call at `ptr` run, its reply given, its buffer freed.
+/// A panic of the extension is written in its log first, with where it
+/// happened and its message (`log`, hidden values replaced by Sioul as every
+/// line), then the module ends, which Sioul says as a stop.
 pub fn call<E: Extension>(ptr: i32, len: i32) -> i32 {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| std::panic::set_hook(Box::new(|info| Sioul.log(&format!("panicked: {info}")))));
     let len = usize::try_from(len).unwrap_or(0);
     // SAFETY: `ptr` came from `alloc` for this length (one byte when it was 0),
     // and Sioul wrote `len` bytes there; it is taken back once.

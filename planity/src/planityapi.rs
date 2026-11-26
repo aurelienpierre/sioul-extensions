@@ -14,7 +14,7 @@
 
 use crate::{API_KEY, Fault};
 use serde_json::{Map, Value, json};
-use sioul_extension::{Host, Request, url};
+use sioul_extension::{Answer, Host, Request, url};
 
 const IDENTITY: &str = "https://identitytoolkit.googleapis.com/v1";
 const PRO_TOKEN: &str = "https://product.api.euwest1.prod.planityapp.com/getProAuthToken";
@@ -27,6 +27,90 @@ const FIRESTORE: &str = "https://firestore.googleapis.com/v1/projects/planity-pr
 const LIMIT: i64 = 300;
 const MAX_PAGES: usize = 400;
 
+// ---------------------------------------------------------------- each step, named
+
+/// The steps, as each problem and each line of the log names them: what was
+/// asked of which service.
+pub const PASSWORD_STEP: &str = "the password sign-in (identitytoolkit)";
+pub const PRO_STEP: &str = "the Pro-token exchange (getProAuthToken)";
+pub const CUSTOM_STEP: &str = "the custom-token sign-in (identitytoolkit)";
+pub const RENEWAL_STEP: &str = "the token's renewal (securetoken)";
+pub const FIRESTORE_STEP: &str = "the appointments' read (Firestore)";
+pub const FEED_STEP: &str = "the calendar feed (getCalendarIcalEvents)";
+
+/// The service's own error code in an answer, when it gives one: Firebase's
+/// `error.message` when it is a code (`INVALID_LOGIN_CREDENTIALS`, the part
+/// before " : " of `TOO_MANY_ATTEMPTS_TRY_LATER : …`), Google's reason for a
+/// key refused (`API_KEY_INVALID`, from `error.details[].reason` or
+/// `error.errors[].reason` `keyInvalid`), an OAuth-style `error`
+/// (`invalid_grant`), or Google's `error.status` (`PERMISSION_DENIED`). Only
+/// a code is ever taken (capitals, digits and `_`, 64 at most), never the
+/// service's prose, which could repeat what was sent.
+pub fn service_code(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let error = value.get("error")?;
+    let code = |text: &str| {
+        let head = text.split(" : ").next().unwrap_or("").trim().to_ascii_uppercase();
+        (!head.is_empty() && head.len() <= 64 && head.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')).then_some(head)
+    };
+    if let Some(text) = error.as_str() {
+        return code(text);
+    }
+    let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+    if let Some(found) = code(message) {
+        return Some(found);
+    }
+    let reasons = ["details", "errors"].iter().flat_map(|list| error.get(*list).and_then(Value::as_array).cloned().unwrap_or_default()).filter_map(|item| item.get("reason").and_then(Value::as_str).map(str::to_string)).collect::<Vec<_>>();
+    if let Some(found) = reasons.iter().find_map(|reason| if reason == "keyInvalid" { Some("API_KEY_INVALID".to_string()) } else { code(reason) }) {
+        return Some(found);
+    }
+    if message.starts_with("API key not valid") {
+        return Some("API_KEY_INVALID".into());
+    }
+    error.get("status").and_then(Value::as_str).and_then(code)
+}
+
+/// What an answer that is not 200 means, for `step`: the step, the HTTP
+/// status and the service's own code, then the cause in words, as a fault of
+/// the kind the person can act on. `credentials`: the password step, where a
+/// 400 without a known code is still a refused sign-in.
+pub fn answered(step: &str, answer: &Answer, credentials: bool) -> Fault {
+    let code = service_code(&answer.body);
+    let said = match &code {
+        Some(code) => format!("{step} answered HTTP {} with {code}", answer.status),
+        None => format!("{step} answered HTTP {}", answer.status),
+    };
+    match code.as_deref() {
+        Some("INVALID_LOGIN_CREDENTIALS" | "INVALID_PASSWORD" | "EMAIL_NOT_FOUND") => Fault::SignIn(format!("{said}: the email or the password was refused")),
+        Some("INVALID_EMAIL") => Fault::SignIn(format!("{said}: the email is not an address it reads")),
+        Some("MISSING_EMAIL" | "MISSING_PASSWORD") => Fault::SignIn(format!("{said}: a field reached it empty")),
+        Some("TOO_MANY_ATTEMPTS_TRY_LATER") => Fault::Refused(format!("{said}: too many tries; the service refuses them for a while")),
+        Some("USER_DISABLED") => Fault::Refused(format!("{said}: the account is disabled")),
+        Some("TOKEN_EXPIRED" | "INVALID_REFRESH_TOKEN" | "INVALID_GRANT" | "USER_NOT_FOUND" | "MISSING_REFRESH_TOKEN" | "INVALID_ID_TOKEN" | "CREDENTIAL_TOO_OLD_LOGIN_AGAIN" | "UNAUTHENTICATED") => Fault::SignIn(format!("{said}: the sign-in kept here has ended")),
+        Some(key) if key.starts_with("API_KEY") => Fault::Changed(format!("{said}: the service refused the key of Planity's web app; an update of the extension is needed")),
+        Some("PERMISSION_DENIED") => Fault::Refused(format!("{said}: this sign-in may not read it")),
+        _ => match answer.status {
+            400 if credentials => Fault::SignIn(format!("{said}: the sign-in was refused")),
+            401 => Fault::SignIn(format!("{said}: the sign-in was refused")),
+            403 => Fault::Refused(format!("{said}: the service refused")),
+            429 => Fault::Unreachable(format!("{said}: too many requests; it tries again later")),
+            500.. => Fault::Unreachable(format!("{said}: the service did not answer as it should; it tries again later")),
+            _ => Fault::Changed(format!("{said}: an answer the extension does not expect")),
+        },
+    }
+}
+
+/// A request of `step`, made by Sioul; its refusal named with the step
+/// (the network, the time, a host Sioul would not reach).
+fn ask(host: &mut dyn Host, step: &str, request: &Request) -> Result<Answer, Fault> {
+    host.web(request).map_err(|refused| Fault::refused_at(step, &refused))
+}
+
+/// A step's line in the log: the step, then what came of it.
+fn said(host: &mut dyn Host, step: &str, what: &str) {
+    host.log(&format!("{step}: {what}"));
+}
+
 // ---------------------------------------------------------------- the sign-in dance
 
 /// The email/password sign-in, the Pro-token exchange and the custom-token
@@ -37,50 +121,46 @@ pub fn sign_in(host: &mut dyn Host, email: &str, password: &str) -> Result<(Stri
     // 1. Firebase email/password → id token A, uid, refresh token A.
     let url_pw = format!("{IDENTITY}/accounts:signInWithPassword?key={API_KEY}");
     let body = json!({ "email": email, "password": password, "returnSecureToken": true, "clientType": "CLIENT_TYPE_WEB" });
-    let answer = host.web(&Request::post_json(&url_pw, &body).header("Accept", "application/json"))?;
+    let answer = ask(host, PASSWORD_STEP, &Request::post_json(&url_pw, &body).header("Accept", "application/json"))?;
     if answer.status != 200 {
-        // EMAIL_NOT_FOUND / INVALID_PASSWORD / INVALID_LOGIN_CREDENTIALS: sign in again.
-        if answer.status == 400 || bad_credentials(&answer.body) {
-            return Err(Fault::SignIn(format!("the email or password was refused: {}", answer.status)));
-        }
-        return Err(Fault::Status(answer.status, "the password sign-in".into()));
+        // INVALID_LOGIN_CREDENTIALS, TOO_MANY_ATTEMPTS_TRY_LATER, USER_DISABLED, a key refused…: named.
+        return Err(answered(PASSWORD_STEP, &answer, true));
     }
-    let signed = answer.json().ok_or_else(|| Fault::Changed("the password sign-in does not read".into()))?;
-    let id_a = non_empty(&signed, "idToken").ok_or_else(|| Fault::Changed("no id token in the password sign-in".into()))?;
-    let uid = non_empty(&signed, "localId").ok_or_else(|| Fault::Changed("no uid in the password sign-in".into()))?;
+    let signed = answer.json().ok_or_else(|| Fault::Changed(format!("{PASSWORD_STEP} answered HTTP 200 with what is not JSON")))?;
+    let id_a = non_empty(&signed, "idToken").ok_or_else(|| Fault::Changed(format!("{PASSWORD_STEP} answered HTTP 200 without an id token")))?;
+    let uid = non_empty(&signed, "localId").ok_or_else(|| Fault::Changed(format!("{PASSWORD_STEP} answered HTTP 200 without an account id")))?;
     let refresh_a = non_empty(&signed, "refreshToken");
-    hide(host, &[Some(&id_a), refresh_a.as_deref()]);
+    hide(host, &[Some(&id_a), refresh_a.as_deref(), Some(&uid)]);
+    said(host, PASSWORD_STEP, "signed in (step 1 of 3)");
 
     // 2. Planity's Pro-token exchange → a Firebase custom token with the Pro claims.
     let body = json!({ "uid": uid, "token": id_a, "source": "web", "idToken": id_a, "isBusinessSharded": true, "isUserSharded": true });
-    let answer = host.web(&Request::post_json(PRO_TOKEN, &body).header("Accept", "application/json"))?;
+    let answer = ask(host, PRO_STEP, &Request::post_json(PRO_TOKEN, &body).header("Accept", "application/json"))?;
     if answer.status != 200 {
-        return Err(Fault::Status(answer.status, "the Pro-token exchange".into()));
+        return Err(answered(PRO_STEP, &answer, false));
     }
-    let pro = answer.json().ok_or_else(|| Fault::Changed("the Pro-token exchange does not read".into()))?;
-    let custom = non_empty(&pro, "token").ok_or_else(|| Fault::Changed("no custom token in the Pro-token exchange".into()))?;
+    let pro = answer.json().ok_or_else(|| Fault::Changed(format!("{PRO_STEP} answered HTTP 200 with what is not JSON")))?;
+    let custom = non_empty(&pro, "token").ok_or_else(|| Fault::Changed(format!("{PRO_STEP} answered HTTP 200 without a custom token: the account may not be a Planity Pro one")))?;
     hide(host, &[Some(&custom)]);
+    said(host, PRO_STEP, "a Pro token received (step 2 of 3)");
 
     // 3. Firebase custom-token sign-in → id token B (Pro claims) and refresh token B.
     let url_custom = format!("{IDENTITY}/accounts:signInWithCustomToken?key={API_KEY}");
     let body = json!({ "token": custom, "returnSecureToken": true });
-    let answer = host.web(&Request::post_json(&url_custom, &body).header("Accept", "application/json"))?;
+    let answer = ask(host, CUSTOM_STEP, &Request::post_json(&url_custom, &body).header("Accept", "application/json"))?;
     if answer.status != 200 {
-        return Err(Fault::Status(answer.status, "the custom-token sign-in".into()));
+        return Err(answered(CUSTOM_STEP, &answer, false));
     }
-    let signed = answer.json().ok_or_else(|| Fault::Changed("the custom-token sign-in does not read".into()))?;
-    let id_b = non_empty(&signed, "idToken").ok_or_else(|| Fault::Changed("no id token in the custom-token sign-in".into()))?;
-    let refresh_b = non_empty(&signed, "refreshToken").ok_or_else(|| Fault::Changed("no refresh token in the custom-token sign-in".into()))?;
+    let signed = answer.json().ok_or_else(|| Fault::Changed(format!("{CUSTOM_STEP} answered HTTP 200 with what is not JSON")))?;
+    let id_b = non_empty(&signed, "idToken").ok_or_else(|| Fault::Changed(format!("{CUSTOM_STEP} answered HTTP 200 without an id token")))?;
+    let refresh_b = non_empty(&signed, "refreshToken").ok_or_else(|| Fault::Changed(format!("{CUSTOM_STEP} answered HTTP 200 without a refresh token")))?;
     hide(host, &[Some(&id_b), Some(&refresh_b)]);
 
     // 4. The business id from token B's claims.
-    let business = business_id(&id_b).ok_or_else(|| Fault::Changed("token B names no Pro business".into()))?;
+    let business = business_id(&id_b).ok_or_else(|| Fault::Changed(format!("{CUSTOM_STEP}: its token names no Planity Pro business (no plPro claim, or no business id in it)")))?;
+    hide(host, &[Some(&business)]);
+    said(host, CUSTOM_STEP, "signed in to the salon's business (step 3 of 3)");
     Ok((refresh_b, business))
-}
-
-/// Whether a sign-in answer names a bad-credentials error.
-fn bad_credentials(body: &str) -> bool {
-    ["EMAIL_NOT_FOUND", "INVALID_PASSWORD", "INVALID_LOGIN_CREDENTIALS"].iter().any(|code| body.contains(code))
 }
 
 /// The business id from an id token's claims: the one claim whose key is a
@@ -113,19 +193,22 @@ fn is_integer(value: &Value) -> bool {
 /// comes. A refusal is the end of the sign-in.
 pub fn mint(host: &mut dyn Host, refresh: &str) -> Result<(String, Option<String>), Fault> {
     let url_token = format!("{SECURETOKEN}?key={API_KEY}");
-    let answer = host.web(&Request::post_form(&url_token, &[("grant_type", "refresh_token"), ("refresh_token", refresh)]).header("Accept", "application/json"))?;
+    let answer = ask(host, RENEWAL_STEP, &Request::post_form(&url_token, &[("grant_type", "refresh_token"), ("refresh_token", refresh)]).header("Accept", "application/json"))?;
     match answer.status {
         200 => {}
-        400 | 401 | 403 => return Err(Fault::SignIn(format!("the token refresh was refused: {}", answer.status))),
-        status => return Err(Fault::Status(status, "the token refresh".into())),
+        // TOKEN_EXPIRED, INVALID_REFRESH_TOKEN, USER_DISABLED, a key refused…: named; a 400 or a 403 without a code, the sign-in's end.
+        400 | 403 if service_code(&answer.body).is_none() => return Err(Fault::SignIn(format!("{RENEWAL_STEP} answered HTTP {}: the sign-in kept here has ended", answer.status))),
+        _ => return Err(answered(RENEWAL_STEP, &answer, false)),
     }
-    let body = answer.json().ok_or_else(|| Fault::Changed("the token refresh does not read".into()))?;
-    // A still-rejected refresh may answer 200 with an error body; treat it as a sign-in end.
-    if body.get("error").is_some() || ["TOKEN_EXPIRED", "INVALID_REFRESH_TOKEN", "USER_DISABLED"].iter().any(|c| answer.body.contains(c)) {
-        return Err(Fault::SignIn("the refresh token is no longer good".into()));
+    let body = answer.json().ok_or_else(|| Fault::Changed(format!("{RENEWAL_STEP} answered HTTP 200 with what is not JSON")))?;
+    // A still-rejected refresh may answer 200 with an error body: the sign-in's end, its code named.
+    if body.get("error").is_some() {
+        let code = service_code(&answer.body).map(|c| format!(" with {c}")).unwrap_or_default();
+        return Err(Fault::SignIn(format!("{RENEWAL_STEP} answered HTTP 200{code}: the sign-in kept here has ended")));
     }
-    let id_token = non_empty(&body, "access_token").ok_or_else(|| Fault::Changed("no access token in the token refresh".into()))?;
+    let id_token = non_empty(&body, "access_token").ok_or_else(|| Fault::Changed(format!("{RENEWAL_STEP} answered HTTP 200 without an access token")))?;
     let rotated = non_empty(&body, "refresh_token");
+    said(host, RENEWAL_STEP, if rotated.is_some() { "a fresh token received, and a new refresh token" } else { "a fresh token received" });
     Ok((id_token, rotated))
 }
 
@@ -153,15 +236,14 @@ pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &
     let mut cursor: Option<(String, String)> = None;
     for _ in 0..MAX_PAGES {
         let body = query_body(from, cursor.as_ref());
-        let answer = host.web(&Request::post_json(&url_query, &body).header("Authorization", &authorization).header("Accept", "application/json"))?;
+        let answer = ask(host, FIRESTORE_STEP, &Request::post_json(&url_query, &body).header("Authorization", &authorization).header("Accept", "application/json"))?;
         match answer.status {
             200 => {}
-            401 => return Err(Fault::SignIn("Firestore refused the token".into())),
-            403 => return Err(Fault::Refused("Firestore refused the business".into())),
-            status => return Err(Fault::Status(status, "the appointments query".into())),
+            // UNAUTHENTICATED (the token refused), PERMISSION_DENIED (the business not readable)…: named.
+            _ => return Err(answered(FIRESTORE_STEP, &answer, false)),
         }
-        let page = answer.json().ok_or_else(|| Fault::Changed("an appointments page does not read".into()))?;
-        let elements = page.as_array().ok_or_else(|| Fault::Changed("an appointments page is not a list".into()))?;
+        let page = answer.json().ok_or_else(|| Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not JSON")))?;
+        let elements = page.as_array().ok_or_else(|| Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not a list of documents")))?;
         let mut documents = 0;
         let mut last: Option<(String, String)> = None;
         for element in elements {
@@ -188,7 +270,7 @@ pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &
             None => return Ok(out),
         }
     }
-    Err(Fault::Changed("too many appointment pages".into()))
+    Err(Fault::Changed(format!("{FIRESTORE_STEP}: more than {MAX_PAGES} pages of appointments")))
 }
 
 // ---------------------------------------------------------------- the official feed
@@ -234,11 +316,12 @@ impl Link {
 /// The calendar's feed, as text. A refusal of the key (401, 403) is the end
 /// of the link (the person pastes it again); anything else, a feed not read.
 pub fn read_feed(host: &mut dyn Host, link: &Link) -> Result<String, Fault> {
-    let answer = host.web(&Request::get(&link.address).header("Accept", "text/calendar"))?;
+    let answer = ask(host, FEED_STEP, &Request::get(&link.address).header("Accept", "text/calendar"))?;
     match answer.status {
         200 => Ok(answer.body),
-        401 | 403 => Err(Fault::SignIn(format!("the calendar's web address was refused: {}", answer.status))),
-        status => Err(Fault::Status(status, "the calendar feed".into())),
+        401 | 403 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP {}: its web address (its key) was refused; paste the calendar's link again", answer.status))),
+        404 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP 404: no calendar at that web address; paste the calendar's link again"))),
+        _ => Err(answered(FEED_STEP, &answer, false)),
     }
 }
 
@@ -329,6 +412,26 @@ fn hide(host: &mut dyn Host, values: &[Option<&str>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The service's own code, from each shape its answers take (invented
+    /// bodies in Firebase's and Google's shapes); its prose never.
+    #[test]
+    fn a_service_s_own_code_is_read_and_its_prose_left() {
+        for (body, code) in [
+            (r#"{"error":{"code":400,"message":"INVALID_LOGIN_CREDENTIALS","errors":[{"message":"INVALID_LOGIN_CREDENTIALS","domain":"global","reason":"invalid"}]}}"#, Some("INVALID_LOGIN_CREDENTIALS")),
+            (r#"{"error":{"code":400,"message":"TOO_MANY_ATTEMPTS_TRY_LATER : Access to this account has been temporarily disabled."}}"#, Some("TOO_MANY_ATTEMPTS_TRY_LATER")),
+            (r#"{"error":{"code":400,"message":"TOKEN_EXPIRED","status":"INVALID_ARGUMENT"}}"#, Some("TOKEN_EXPIRED")),
+            (r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}"#, Some("API_KEY_INVALID")),
+            (r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","errors":[{"reason":"keyInvalid"}]}}"#, Some("API_KEY_INVALID")),
+            (r#"{"error":{"code":403,"message":"Missing or insufficient permissions.","status":"PERMISSION_DENIED"}}"#, Some("PERMISSION_DENIED")),
+            (r#"{"error":"invalid_grant","error_description":"Bad Request"}"#, Some("INVALID_GRANT")),
+            (r#"{"error":{"message":"the token tk-invented-1234 was refused"}}"#, None),
+            ("<html>Service Unavailable</html>", None),
+            ("", None),
+        ] {
+            assert_eq!(service_code(body).as_deref(), code, "{body}");
+        }
+    }
 
     #[test]
     fn firestore_values_flatten() {

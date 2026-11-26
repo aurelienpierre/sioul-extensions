@@ -88,11 +88,15 @@ struct Scenario {
     firestore_status: Option<u16>,
     /// The feed's status and body.
     feed: (u16, String),
+    /// What the password sign-in answers in place of its recorded answer.
+    password_answer: Option<(u16, String)>,
+    /// What the token's renewal answers in place of its recorded answer.
+    renewal_answer: Option<(u16, String)>,
 }
 
 impl Default for Scenario {
     fn default() -> Self {
-        Self { bad_password: false, expired_refresh: false, rotated: None, documents: recorded_documents(), firestore_status: None, feed: (200, recorded("feed.ics")) }
+        Self { bad_password: false, expired_refresh: false, rotated: None, documents: recorded_documents(), firestore_status: None, feed: (200, recorded("feed.ics")), password_answer: None, renewal_answer: None }
     }
 }
 
@@ -158,6 +162,9 @@ fn web(scenario: Scenario) -> impl FnMut(&Request) -> Answer {
         assert!(url.contains(&format!("key={}", crate::API_KEY)) || url.contains("firestore.googleapis.com") || url.contains("getProAuthToken"), "the API key rides the identitytoolkit and securetoken calls: {url}");
         if url.contains("identitytoolkit.googleapis.com") && url.contains("signInWithPassword") {
             assert!(body.contains("\"returnSecureToken\":true") && body.contains("CLIENT_TYPE_WEB"), "{body}");
+            if let Some((status, body)) = &scenario.password_answer {
+                return Answer::new(*status, body.clone());
+            }
             return if scenario.bad_password { Answer::new(400, recorded("signin-password-bad.json")) } else { Answer::new(200, recorded("signin-password.json")) };
         }
         if url.contains("getProAuthToken") {
@@ -170,6 +177,9 @@ fn web(scenario: Scenario) -> impl FnMut(&Request) -> Answer {
         }
         if url.contains("securetoken.googleapis.com") {
             assert!(body.contains("grant_type=refresh_token") && body.contains("refresh_token="), "{body}");
+            if let Some((status, body)) = &scenario.renewal_answer {
+                return Answer::new(*status, body.clone());
+            }
             if scenario.expired_refresh {
                 return Answer::new(400, recorded("securetoken-expired.json"));
             }
@@ -308,6 +318,136 @@ fn the_link_is_checked_before_anything_and_against_the_business() {
     let reply = sign_in(&mut host, &link().replacen(KEY, &"K".repeat(2400), 1));
     assert_eq!(reply["problem"]["kind"], "sign-in", "{:?}", host.log);
     assert_eq!(host.secret, None);
+}
+
+// ---------------------------------------------------------------- what failed, said precisely
+
+/// A Firebase error body with this `error.message` (invented answers, in Firebase's shape).
+fn firebase_error(status: u16, message: &str) -> (u16, String) {
+    (status, json!({ "error": { "code": status, "message": message, "errors": [{ "message": message, "domain": "global", "reason": "invalid" }] } }).to_string())
+}
+
+/// The problem's detail of a reply.
+fn detail(reply: &Value) -> String {
+    reply["problem"]["detail"].as_str().unwrap_or("").to_string()
+}
+
+/// Every problem names its step and its cause: the service's own code and the
+/// HTTP status when the service answered, which field of the form was empty or
+/// malformed (never its value), and whether no sign-in is kept on this device,
+/// the one kept does not read, or the keyring did not answer.
+#[test]
+fn every_problem_names_its_step_and_its_cause() {
+    let sign_in_answering = |answer: (u16, String)| {
+        let mut host = stand_in(Scenario { password_answer: Some(answer), ..Scenario::default() });
+        let reply = sign_in(&mut host, &link());
+        (reply, host)
+    };
+    // The password sign-in, by Firebase's own code.
+    for (answer, kind, said) in [
+        (firebase_error(400, "INVALID_LOGIN_CREDENTIALS"), "sign-in", "the password sign-in (identitytoolkit) answered HTTP 400 with INVALID_LOGIN_CREDENTIALS: the email or the password was refused"),
+        (firebase_error(400, "TOO_MANY_ATTEMPTS_TRY_LATER : Access to this account has been temporarily disabled."), "refused", "the password sign-in (identitytoolkit) answered HTTP 400 with TOO_MANY_ATTEMPTS_TRY_LATER: too many tries"),
+        (firebase_error(400, "USER_DISABLED"), "refused", "answered HTTP 400 with USER_DISABLED: the account is disabled"),
+        (firebase_error(400, "INVALID_EMAIL"), "sign-in", "answered HTTP 400 with INVALID_EMAIL"),
+        ((400, json!({ "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT", "details": [{ "reason": "API_KEY_INVALID", "domain": "googleapis.com" }] } }).to_string()), "changed", "answered HTTP 400 with API_KEY_INVALID: the service refused the key"),
+        ((403, json!({ "error": { "code": 403, "message": "Requests to this API are blocked.", "status": "PERMISSION_DENIED", "details": [{ "reason": "API_KEY_SERVICE_BLOCKED" }] } }).to_string()), "changed", "answered HTTP 403 with API_KEY_SERVICE_BLOCKED"),
+        ((503, String::new()), "unreachable", "the password sign-in (identitytoolkit) answered HTTP 503: the service did not answer"),
+    ] {
+        let (reply, host) = sign_in_answering(answer);
+        assert_eq!(reply["problem"]["kind"], kind, "{reply}");
+        assert!(detail(&reply).contains(said), "{said} in {reply}");
+        assert!(!detail(&reply).contains("Access to this account") && !detail(&reply).contains("Please pass"), "never the service's prose: {reply}");
+        assert!(host.log.iter().any(|l| l.starts_with("sign-in: ") && l.contains("answered HTTP")), "{:?}", host.log);
+        assert_eq!(host.secret, None);
+    }
+    // The form: which field is empty or malformed, never its value; nothing asked of the network.
+    let mut host = stand_in(Scenario::default());
+    for (fields, said) in [
+        (vec![("email", "marie@example.org"), ("password", ""), ("web-address", link().as_str())], "the form: the password field is empty"),
+        (vec![("email", " "), ("password", PASSWORD), ("web-address", "")], "the form: the email and web address fields are empty"),
+        (vec![("email", "marie.example.org"), ("password", PASSWORD), ("web-address", link().as_str())], "the form: the email field does not hold an address"),
+        (vec![("email", "marie@example.org"), ("password", PASSWORD), ("web-address", "https://calendar.example.org/feed?key=k7f3a9e2b1c")], "the form: the web address is not Planity's calendar export"),
+    ] {
+        let reply = host.sign_in_with::<Planity>("en", None, &fields);
+        assert_eq!(reply["problem"]["kind"], "sign-in");
+        assert!(detail(&reply).starts_with(said), "{said} in {reply}");
+        for (_, value) in &fields {
+            assert!(value.trim().len() < 4 || !detail(&reply).contains(value.trim()), "{value} in {reply}");
+        }
+    }
+    assert!(host.asked.is_empty());
+    // The token's renewal, by its own code.
+    for (answer, kind, said) in [
+        (firebase_error(400, "TOKEN_EXPIRED"), "sign-in", "the token's renewal (securetoken) answered HTTP 400 with TOKEN_EXPIRED: the sign-in kept here has ended"),
+        (firebase_error(400, "INVALID_REFRESH_TOKEN"), "sign-in", "answered HTTP 400 with INVALID_REFRESH_TOKEN"),
+        (firebase_error(400, "USER_DISABLED"), "refused", "the token's renewal (securetoken) answered HTTP 400 with USER_DISABLED"),
+        ((400, json!({ "error": "invalid_grant", "error_description": "Bad Request" }).to_string()), "sign-in", "answered HTTP 400 with INVALID_GRANT"),
+        ((200, json!({ "error": { "message": "TOKEN_EXPIRED" } }).to_string()), "sign-in", "answered HTTP 200 with TOKEN_EXPIRED: the sign-in kept here has ended"),
+    ] {
+        let mut host = stand_in(Scenario { renewal_answer: Some(answer), feed: (500, String::new()), ..Scenario::default() });
+        signed_in(&mut host);
+        let reply = refresh(&mut host, "en");
+        assert_eq!(reply["problem"]["kind"], kind, "{reply}");
+        assert!(detail(&reply).contains(said), "{said} in {reply}");
+    }
+    // Firestore and the feed: each its step, its status, its code.
+    let mut host = stand_in(Scenario { firestore_status: Some(403), ..Scenario::default() });
+    signed_in(&mut host);
+    assert!(detail(&refresh(&mut host, "en")).starts_with("the appointments' read (Firestore) answered HTTP 403"));
+    let mut host = stand_in(Scenario { feed: (401, String::new()), ..Scenario::default() });
+    signed_in(&mut host);
+    assert!(detail(&refresh(&mut host, "en")).starts_with("the calendar feed (getCalendarIcalEvents) answered HTTP 401: its web address (its key) was refused"));
+    // The keyring: none kept here, one that does not read, the keyring that did not answer.
+    let mut host = stand_in(Scenario::default());
+    assert!(detail(&refresh(&mut host, "en")).starts_with("no sign-in kept on this device"));
+    host.secret = Some("not what Planity keeps".into());
+    assert!(detail(&refresh(&mut host, "en")).starts_with("the sign-in kept here does not read"));
+    host.secret = Some(json!({ "b": BUSINESS }).to_string());
+    assert!(detail(&refresh(&mut host, "en")).contains("neither a refresh token nor the calendar's link"));
+    host.secret_refused = Some("keyring".into());
+    let reply = refresh(&mut host, "en");
+    assert_eq!(reply["problem"]["kind"], "unreachable");
+    assert!(detail(&reply).starts_with("the keyring did not answer"), "{reply}");
+    // Keeping it, too.
+    let mut host = stand_in(Scenario::default());
+    host.secret_refused = Some("keyring".into());
+    let reply = sign_in(&mut host, &link());
+    assert_eq!(reply["problem"]["kind"], "unreachable");
+    assert!(detail(&reply).starts_with("the keyring did not answer when the sign-in was kept"), "{reply}");
+    assert_eq!((host.asked.len(), host.secret.clone()), (3, None), "the three steps ran, nothing kept");
+}
+
+/// One line a step in the log, none holding a value: the form read, each of
+/// the sign-in's three steps, the renewal, what the keyring held; the
+/// business's id hidden, since it names Firestore's path in Sioul's lines.
+#[test]
+fn the_log_says_each_step_and_never_a_value() {
+    let mut host = stand_in(Scenario::default());
+    assert_eq!(sign_in(&mut host, &link()), json!({ "signed_in": true }));
+    for step in ["sign-in: the form's three fields read", "the password sign-in (identitytoolkit): signed in (step 1 of 3)", "the Pro-token exchange (getProAuthToken): a Pro token received (step 2 of 3)", "the custom-token sign-in (identitytoolkit): signed in to the salon's business (step 3 of 3)", "sign-in: signed in to Planity"] {
+        assert!(host.log.iter().any(|l| l.starts_with(step)), "{step} in {:?}", host.log);
+    }
+    let mut host = stand_in(Scenario { rotated: Some("RT-rotated-invented-0000000000".into()), ..Scenario::default() });
+    signed_in(&mut host);
+    assert_eq!(refresh(&mut host, "en")["problem"], Value::Null);
+    for step in ["refresh: the sign-in kept here read (a refresh token, the calendar's link)", "the token's renewal (securetoken): a fresh token received, and a new refresh token", "refresh: the new refresh token kept on this device"] {
+        assert!(host.log.iter().any(|l| l.starts_with(step)), "{step} in {:?}", host.log);
+    }
+    assert!(host.hidden.iter().any(|h| h == BUSINESS), "the business's id hidden");
+    for value in [BUSINESS, KEY, REFRESH_B, "RT-rotated-invented-0000000000", "-Cinvented0000000000"] {
+        assert!(!host.log_shows(value), "{value} in {:?}", host.log);
+    }
+}
+
+/// The password is sent exactly as typed (a space may be part of it); the
+/// email and the link lose the spaces a phone's keyboard adds around them.
+#[test]
+fn the_password_is_sent_as_typed_the_email_and_link_trimmed() {
+    let mut host = stand_in(Scenario::default());
+    let reply = host.sign_in_with::<Planity>("en", None, &[("email", " marie@example.org "), ("password", " motdepasse-invented "), ("web-address", &format!(" {} ", link()))]);
+    assert_eq!(reply, json!({ "signed_in": true }), "{:?}", host.log);
+    let body: Value = serde_json::from_str(host.asked[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!((body["email"].as_str(), body["password"].as_str()), (Some("marie@example.org"), Some(" motdepasse-invented ")));
 }
 
 // ---------------------------------------------------------------- the merge
