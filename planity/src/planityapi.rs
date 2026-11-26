@@ -296,19 +296,19 @@ impl Link {
     /// The link checked; what is wrong with it, otherwise (for the log, never the link itself).
     pub fn read(text: &str) -> Result<Self, &'static str> {
         let address = text.trim().split('#').next().unwrap_or("").to_string();
-        let rest = address.strip_prefix("https://").ok_or("the web address is not https")?;
+        let rest = address.strip_prefix("https://").ok_or("the iCal private link is not https")?;
         let authority = rest.split(['/', '?']).next().unwrap_or("");
         if !authority.eq_ignore_ascii_case(FEED_HOST) {
-            return Err("the web address is not Planity's calendar export");
+            return Err("the iCal private link is not Planity's calendar export");
         }
         let path = rest[authority.len()..].split('?').next().unwrap_or("");
         if path != FEED_PATH {
-            return Err("the web address is not a calendar export");
+            return Err("the iCal private link is not a calendar export");
         }
         let value = |name: &str| url::query_value(&address, name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        let calendar = value("calendarId").ok_or("the web address names no calendar")?;
-        let business = value("businessId").ok_or("the web address names no business")?;
-        let key = value("key").ok_or("the web address has no key")?;
+        let calendar = value("calendarId").ok_or("the iCal private link names no calendar")?;
+        let business = value("businessId").ok_or("the iCal private link names no business")?;
+        let key = value("key").ok_or("the iCal private link has no key")?;
         Ok(Self { address, calendar, business, key })
     }
 }
@@ -319,8 +319,8 @@ pub fn read_feed(host: &mut dyn Host, link: &Link) -> Result<String, Fault> {
     let answer = ask(host, FEED_STEP, &Request::get(&link.address).header("Accept", "text/calendar"))?;
     match answer.status {
         200 => Ok(answer.body),
-        401 | 403 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP {}: its web address (its key) was refused; paste the calendar's link again", answer.status))),
-        404 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP 404: no calendar at that web address; paste the calendar's link again"))),
+        401 | 403 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP {}: the iCal private link (its key) was refused; paste the iCal private link again", answer.status))),
+        404 => Err(Fault::SignIn(format!("{FEED_STEP} answered HTTP 404: no calendar at that iCal private link; paste the iCal private link again"))),
         _ => Err(answered(FEED_STEP, &answer, false)),
     }
 }

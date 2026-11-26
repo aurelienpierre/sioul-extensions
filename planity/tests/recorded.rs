@@ -364,9 +364,9 @@ fn every_problem_names_its_step_and_its_cause() {
     let mut host = stand_in(Scenario::default());
     for (fields, said) in [
         (vec![("email", "marie@example.org"), ("password", ""), ("web-address", link().as_str())], "the form: the password field is empty"),
-        (vec![("email", " "), ("password", PASSWORD), ("web-address", "")], "the form: the email and web address fields are empty"),
+        (vec![("email", " "), ("password", PASSWORD), ("web-address", "")], "the form: the email and iCal private link fields are empty"),
         (vec![("email", "marie.example.org"), ("password", PASSWORD), ("web-address", link().as_str())], "the form: the email field does not hold an address"),
-        (vec![("email", "marie@example.org"), ("password", PASSWORD), ("web-address", "https://calendar.example.org/feed?key=k7f3a9e2b1c")], "the form: the web address is not Planity's calendar export"),
+        (vec![("email", "marie@example.org"), ("password", PASSWORD), ("web-address", "https://calendar.example.org/feed?key=k7f3a9e2b1c")], "the form: the iCal private link is not Planity's calendar export"),
     ] {
         let reply = host.sign_in_with::<Planity>("en", None, &fields);
         assert_eq!(reply["problem"]["kind"], "sign-in");
@@ -396,7 +396,7 @@ fn every_problem_names_its_step_and_its_cause() {
     assert!(detail(&refresh(&mut host, "en")).starts_with("the appointments' read (Firestore) answered HTTP 403"));
     let mut host = stand_in(Scenario { feed: (401, String::new()), ..Scenario::default() });
     signed_in(&mut host);
-    assert!(detail(&refresh(&mut host, "en")).starts_with("the calendar feed (getCalendarIcalEvents) answered HTTP 401: its web address (its key) was refused"));
+    assert!(detail(&refresh(&mut host, "en")).starts_with("the calendar feed (getCalendarIcalEvents) answered HTTP 401: the iCal private link (its key) was refused"));
     // The keyring: none kept here, one that does not read, the keyring that did not answer.
     let mut host = stand_in(Scenario::default());
     assert!(detail(&refresh(&mut host, "en")).starts_with("no sign-in kept on this device"));

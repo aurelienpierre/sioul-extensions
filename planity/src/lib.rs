@@ -108,7 +108,7 @@ fn signed_in(host: &mut dyn Host, call: &Call) -> Result<(), Fault> {
     let password = credentials.password.clone().unwrap_or_default();
     // Defensive: never let a credential reach the log, even though Sioul already hides them.
     host.hide(&[&email, &password, &address]);
-    let empty: Vec<&str> = [("email", email.is_empty()), ("password", password.is_empty()), ("web address", address.is_empty())].iter().filter(|(_, empty)| *empty).map(|(name, _)| *name).collect();
+    let empty: Vec<&str> = [("email", email.is_empty()), ("password", password.is_empty()), ("iCal private link", address.is_empty())].iter().filter(|(_, empty)| *empty).map(|(name, _)| *name).collect();
     match empty.as_slice() {
         [] => {}
         [one] => return Err(Fault::SignIn(format!("the form: the {one} field is empty"))),
@@ -120,10 +120,10 @@ fn signed_in(host: &mut dyn Host, call: &Call) -> Result<(), Fault> {
     // The link is checked before anything is asked of the network.
     let link = Link::read(&address).map_err(|why| Fault::SignIn(format!("the form: {why}")))?;
     host.hide(&[&link.key, &link.address, &link.business, &link.calendar]);
-    host.log("sign-in: the form's three fields read, the calendar's web address is Planity's export");
+    host.log("sign-in: the form's three fields read, the iCal private link is Planity's export");
     let (refresh, business) = planityapi::sign_in(host, &email, &password)?;
     if business != link.business {
-        return Err(Fault::SignIn("the form: the web address is another business's calendar than the account's".into()));
+        return Err(Fault::SignIn("the form: the iCal private link is another business's calendar than the account's".into()));
     }
     keep(host, &Kept { r: Some(refresh), b: business, l: Some(link.address.clone()) })
 }
@@ -223,8 +223,8 @@ fn read(host: &mut dyn Host, mut kept: Kept, french: bool) -> RefreshReply {
     }
     // The feed half.
     let feed = match &link {
-        None => Err(Fault::SignIn("no calendar web address kept on this device: sign in again with it".into())),
-        Some(Err(why)) => Err(Fault::SignIn(format!("the calendar web address kept here: {why}; sign in again with it"))),
+        None => Err(Fault::SignIn("no iCal private link kept on this device: sign in again with it".into())),
+        Some(Err(why)) => Err(Fault::SignIn(format!("the iCal private link kept here does not read ({why}); sign in again with it"))),
         Some(Ok(link)) => planityapi::read_feed(host, link).and_then(|text| feed::read(&text).ok_or_else(|| Fault::Changed(format!("{} answered HTTP 200 with what is not an iCalendar", planityapi::FEED_STEP)))),
     };
     match &feed {
