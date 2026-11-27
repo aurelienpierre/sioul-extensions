@@ -36,7 +36,7 @@ use crate::Planity;
 use serde_json::{Value, json};
 use sioul_extension::standin::StandIn;
 use sioul_extension::{Answer, Request, run};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 2026-11-22T10:00:00Z.
 const NOW: i64 = 1_795_341_600;
@@ -132,17 +132,17 @@ fn run_query(scenario: &Scenario, body: &str) -> Answer {
         (at["values"][0]["stringValue"].as_str().unwrap().to_string(), at["values"][1]["referenceValue"].as_str().unwrap().to_string())
     });
 
-    let mut sorted = scenario.documents.clone();
-    sorted.sort_by(|a, b| (doc_s(a), doc_name(a)).cmp(&(doc_s(b), doc_name(b))));
+    // Sorted by reference (a salon's two years hold thousands), only the page cloned.
+    let mut sorted: Vec<(String, String, &Value)> = scenario.documents.iter().map(|d| (doc_s(d), doc_name(d), d)).filter(|(s, _, _)| *s >= from).collect();
+    sorted.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
     let page: Vec<Value> = sorted
         .into_iter()
-        .filter(|document| doc_s(document) >= from)
-        .filter(|document| match &cursor {
-            Some((s, name)) => (doc_s(document), doc_name(document)) > (s.clone(), name.clone()),
+        .filter(|(s, name, _)| match &cursor {
+            Some((after, after_name)) => (s, name) > (after, after_name),
             None => true,
         })
         .take(limit)
-        .map(|document| json!({ "document": document, "readTime": "2026-11-22T10:00:00.000000Z" }))
+        .map(|(_, _, document)| json!({ "document": document, "readTime": "2026-11-22T10:00:00.000000Z" }))
         .collect();
     // A read-time-only marker leads the page, as a Firestore stream does.
     let mut elements = vec![json!({ "readTime": "2026-11-22T10:00:00.000000Z" })];
@@ -216,9 +216,10 @@ fn refresh(host: &mut StandIn, lang: &str) -> Value {
     call(host, json!({ "interface": 1, "call": "refresh", "lang": lang }))
 }
 
-/// A sign-in kept, as `sign-in` keeps it.
+/// A sign-in kept, as `sign-in` keeps it, on a device that read the whole
+/// past an hour ago: its refreshes read the window alone.
 fn signed_in(host: &mut StandIn) {
-    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link(), "h": NOW - 3600 }).to_string());
 }
 
 fn sign_in(host: &mut StandIn, address: &str) -> Value {
@@ -254,7 +255,8 @@ fn the_sign_in_keeps_the_refresh_token_the_business_and_the_link_never_the_passw
     let secret = host.secret.clone().unwrap();
     let kept: Value = serde_json::from_str(&secret).unwrap();
     assert_eq!((kept["r"].as_str(), kept["b"].as_str(), kept["l"].as_str()), (Some(REFRESH_B), Some(BUSINESS), Some(link().as_str())));
-    assert_eq!(kept.as_object().unwrap().len(), 3, "only r, b and l: {kept}");
+    assert_eq!(kept["s"], json!(NOW), "when this device signed in");
+    assert_eq!(kept.as_object().unwrap().len(), 4, "only r, b, l and s: the whole past not read yet: {kept}");
     assert!(secret.len() <= 2400, "the keyring keeps 2400 bytes at most");
     assert!(!secret.contains(PASSWORD) && !secret.contains("marie@example.org"), "never the password nor the email");
     // The password, every token, the link and its key are hidden and absent from the log.
@@ -464,7 +466,7 @@ fn a_refresh_merges_both_sources_into_one_busy_agenda() {
     assert_eq!(agenda["id"], "cinvented0000000000", "a stable id from the calendar id, the same in both sources");
     assert_eq!(agenda["name"], "Institut Exemple", "the feed's calendar name");
     assert_eq!(agenda["busy"], true, "the salon's own appointments are busy time");
-    assert_eq!(agenda["period"], json!({ "from": "2026-09-23T10:00:00Z", "until": "2027-03-22T10:00:00Z" }), "both answered: the window read");
+    assert_eq!(agenda["period"], json!({ "from": "2026-11-22T10:00:00Z", "until": "2027-03-22T10:00:00Z" }), "both answered: from now to the window's end, never the past");
     let calendar = unfolded(agenda);
     assert!(calendar.contains("X-WR-CALNAME:Institut Exemple\r\n"));
     // 5 one-off bookings of the feed in the window, 12 + 20 occurrences of its two series, 3 from Firestore alone.
@@ -754,7 +756,7 @@ fn a_rotated_refresh_token_is_kept_with_the_link() {
     let reply = refresh(&mut host, "en");
     assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
     let kept: Value = serde_json::from_str(host.secret.as_deref().unwrap()).unwrap();
-    assert_eq!(kept, json!({ "r": "RT-rotated-invented-0000000000", "b": BUSINESS, "l": link() }));
+    assert_eq!(kept, json!({ "r": "RT-rotated-invented-0000000000", "b": BUSINESS, "l": link(), "h": NOW - 3600 }));
     assert!(!host.log_shows("RT-rotated-invented-0000000000"));
 }
 
@@ -1104,4 +1106,376 @@ fn each_appointment_names_its_services_and_its_client() {
     let calendar = unfolded(&reply["agendas"][0]);
     assert!(has(&vevent(&calendar, &v(2)), "CATEGORIES:Couleur,Coupe,Brushing") && !calendar.contains("X-SIOUL-PERSON"), "{calendar}");
     assert_eq!(reply.get("contacts"), None);
+}
+
+// ---------------------------------------------------------------- the whole past
+
+/// The salon's two years: `count` invented appointments of the past, evenly
+/// from 725 days back to 62 days back (before the window and its day of
+/// margin for the clients), `v(first + i)`,
+/// each with an invented client of its own past clientele (`client(5000 +
+/// i % 97)`, "Cliente Passée NN", whom the window's documents never name),
+/// one in ten cancelled; a note of `note` characters when it is not zero.
+fn past(first: u32, count: u32, note: usize) -> Vec<Value> {
+    let paris = jiff::tz::db().get("Europe/Paris").unwrap();
+    let (oldest, newest) = (NOW - 725 * 86_400, NOW - 62 * 86_400);
+    (0..count)
+        .map(|i| {
+            let at = oldest + (newest - oldest) * i64::from(i) / i64::from(count.max(2) - 1);
+            let start = crate::local_string(at, &paris).unwrap();
+            let who = 5000 + i % 97;
+            let mut one = document(first + i, &start, 1_700_000_000_000 + i64::from(i), Some(json!({ "id": client(who), "name": format!("Cliente Passée {who}"), "phone": format!("+3361{who:07}") })), i % 10 == 3);
+            if note > 0 {
+                one["fields"]["t"] = json!({ "stringValue": "n".repeat(note) });
+            }
+            one
+        })
+        .collect()
+}
+
+/// The earliest `from` of the appointments' reads asked since `since` requests: where a piece of the past began, or the window's.
+fn read_from(host: &StandIn, since: usize) -> String {
+    host.asked[since..]
+        .iter()
+        .filter(|r| r.url.ends_with(":runQuery"))
+        .map(|query| {
+            let body: Value = serde_json::from_str(query.body.as_deref().unwrap()).unwrap();
+            body["structuredQuery"]["where"]["fieldFilter"]["value"]["stringValue"].as_str().unwrap().to_string()
+        })
+        .min()
+        .expect("a read of the appointments")
+}
+
+/// One refresh at `now`, its requests counted: what it answered, and how many it asked.
+fn refresh_at(host: &mut StandIn, now: i64) -> (Value, usize, String) {
+    host.now = now;
+    let since = host.asked.len();
+    let reply = refresh(host, "en");
+    let from = read_from(host, since);
+    (reply, host.asked.len() - since, from)
+}
+
+/// What the keyring holds now, as JSON.
+fn kept(host: &StandIn) -> Value {
+    serde_json::from_str(host.secret.as_deref().unwrap()).unwrap()
+}
+
+/// An instant written by the agenda (`20261202T090000Z`, or a date) or the interface (RFC 3339), in seconds.
+fn instant(text: &str) -> i64 {
+    if text.contains('-') {
+        return text.parse::<jiff::Timestamp>().unwrap().as_second();
+    }
+    let digit = |range: std::ops::Range<usize>| text[range].parse::<i64>().unwrap();
+    let day = sioul_extension::ical::days(digit(0..4), digit(4..6) as u32, digit(6..8) as u32) * 86_400;
+    if text.len() >= 15 { day + digit(9..11) * 3600 + digit(11..13) * 60 + digit(13..15) } else { day }
+}
+
+/// An event's start, from its `DTSTART` line.
+fn start_of(event: &str) -> i64 {
+    let line = event.split("\r\n").find(|l| l.starts_with("DTSTART")).unwrap();
+    instant(line.rsplit(':').next().unwrap())
+}
+
+/// Every bound Sioul counts on a reply before it writes anything (its
+/// engine's limits and `reply::refresh_reply`): past one, the whole reply is
+/// refused. The requests one call asked are counted too.
+fn within_every_bound(reply: &Value, requests: usize) {
+    assert!(reply.to_string().len() <= 8 << 20, "a reply of 8 MiB at most: {}", reply.to_string().len());
+    assert!(requests <= 100, "100 web requests a call: {requests}");
+    let agendas = reply["agendas"].as_array().unwrap();
+    assert!(agendas.len() <= 32);
+    for agenda in agendas {
+        let text = agenda["calendar"].as_str().unwrap();
+        assert!(text.len() <= 8 << 20 && text.matches('\n').count() <= 250_000, "{} bytes, {} lines", text.len(), text.matches('\n').count());
+        assert!(vevents(text).len() <= 20_000);
+        if let Some(period) = agenda.get("period") {
+            let (from, until) = (instant(period["from"].as_str().unwrap()), instant(period["until"].as_str().unwrap()));
+            assert!(until > from && until - from <= 400 * 86_400, "a period read of 400 days at most");
+        }
+    }
+    within_sioul_bounds(reply);
+}
+
+/// The first refresh after this version (a sign-in kept without the mark)
+/// reads the whole past, two years back, paged, beside the window (one piece:
+/// fewer documents than a piece holds):
+/// every appointment of those two years becomes an event, the cancelled
+/// ones said cancelled, nothing older; the period still begins now; the set
+/// of clients is the window's alone; the device notes it read the whole
+/// past. Then the refreshes of the week read the window alone, until a week
+/// has passed.
+#[test]
+fn the_whole_past_comes_paged_once_then_the_window_alone_for_a_week() {
+    let mut documents = recorded_documents();
+    documents.extend(past(1000, 900, 0));
+    // Older than two years: not read.
+    documents.push(document(999, "2024-09-30 10:00", 1_690_000_000_000, Some(json!({ "id": client(4999), "name": "Cliente Ancienne" })), false));
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+
+    let (reply, requests, from) = refresh_at(&mut host, NOW);
+    assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
+    within_every_bound(&reply, requests);
+    assert_eq!(from, "2024-11-22 11:00", "two years back, as a Europe/Paris wall clock");
+    let pages = host.asked.iter().filter(|r| r.url.ends_with(":runQuery")).count();
+    assert_eq!(pages, 4 + 1, "900 documents of the past, 300 a page, the last reaching into the window; then the window's one");
+    let agenda = &reply["agendas"][0];
+    assert_eq!(agenda["period"], json!({ "from": "2026-11-22T10:00:00Z", "until": "2027-03-22T10:00:00Z" }), "the period begins now: the past is never in it");
+    let calendar = unfolded(agenda);
+    let events = vevents(&calendar);
+    assert_eq!(events.len(), 40 + 900, "the window's 40 and every appointment of the two years");
+    for i in [0, 1, 450, 899] {
+        let event = vevent(&calendar, &v(1000 + i));
+        assert!(has(&event, &format!("SUMMARY:Cliente Passée {}", 5000 + i % 97)), "{event}");
+        assert_eq!(has(&event, "STATUS:CANCELLED"), i % 10 == 3, "{event}");
+    }
+    let of_the_past: BTreeSet<String> = (0..900).map(|i| v(1000 + i)).collect();
+    let cancelled = events.iter().filter(|(uid, event)| of_the_past.contains(uid) && has(event, "STATUS:CANCELLED")).count();
+    assert_eq!(cancelled, 90, "every cancelled appointment of the past is kept, said cancelled");
+    assert!(!calendar.contains(&format!("UID:{}\r\n", v(999))), "nothing older than two years");
+    // The set of clients stays the window's: no card is made for the past's clientele.
+    let people: Vec<&str> = reply["contacts"][0]["people"].as_array().unwrap().iter().filter_map(|p| p["name"].as_str()).collect();
+    assert!(people.contains(&MARIE) && !people.iter().any(|p| p.starts_with("Cliente")), "{people:?}");
+    assert_eq!(kept(&host)["h"], json!(NOW), "this device read the whole past");
+    assert_eq!((kept(&host)["r"].as_str(), kept(&host)["l"].as_str()), (Some(REFRESH_B), Some(link().as_str())), "the sign-in kept as it was");
+
+    // Three hours later, and until a week has passed: the window alone, the mark unchanged.
+    for later in [3 * 3600, 3 * 86_400, 7 * 86_400 - 60] {
+        let (reply, requests, from) = refresh_at(&mut host, NOW + later);
+        within_every_bound(&reply, requests);
+        assert!(from.starts_with("2026-09") || from.starts_with("2026-10") || from.starts_with("2026-11"), "the window's sixty days: {from}");
+        let calendar = unfolded(&reply["agendas"][0]);
+        assert!(!calendar.contains(&format!("UID:{}\r\n", v(1000 + 899))), "the past is not read again");
+        assert_eq!(requests, 3, "the renewal, one page of the window, the feed");
+        assert_eq!(kept(&host)["h"], json!(NOW));
+        assert_eq!(reply["agendas"][0]["period"]["from"], json!(sioul_extension::ical::rfc3339(NOW + later)), "the period begins at that refresh's now");
+    }
+    // A week on: the whole past again, noted again.
+    let (reply, requests, from) = refresh_at(&mut host, NOW + 7 * 86_400);
+    within_every_bound(&reply, requests);
+    assert!(from.starts_with("2024-11-29"), "{from}");
+    assert_eq!(kept(&host)["h"], json!(NOW + 7 * 86_400));
+}
+
+/// Sioul's door as it treats an agenda's events (its `door::plan`, in
+/// Sioul's `crates/sioul-core/src/extensions/door.rs`): every event of the
+/// reply added or written again; one it holds that the reply does not,
+/// removed only when it begins within the period the reply read and the
+/// reply holds an event; nothing else. What it removed.
+fn door(calendar: &mut BTreeMap<String, i64>, reply: &Value) -> Vec<String> {
+    let agenda = &reply["agendas"][0];
+    let events: BTreeMap<String, i64> = vevents(&unfolded(agenda)).into_iter().map(|(uid, text)| (uid, start_of(&text))).collect();
+    let mut removed = Vec::new();
+    if let (Some(period), false) = (agenda.get("period"), events.is_empty()) {
+        let (from, until) = (instant(period["from"].as_str().unwrap()), instant(period["until"].as_str().unwrap()));
+        calendar.retain(|uid, start| {
+            let kept = events.contains_key(uid) || !(*start >= from && *start < until);
+            if !kept {
+                removed.push(uid.clone());
+            }
+            kept
+        });
+    }
+    calendar.extend(events);
+    removed
+}
+
+/// Once in the calendar, an appointment of the past stays, whatever later
+/// refreshes bring: here Planity loses the whole past, an appointment of ten
+/// days ago and one in five days; the door then removes the one to come
+/// alone, at the next refresh as at the next whole read; an appointment that
+/// was to come when it was read and is past when it is lost stays too.
+#[test]
+fn history_never_vanishes_whatever_later_refreshes_bring() {
+    let paris = jiff::tz::db().get("Europe/Paris").unwrap();
+    let at = |offset: i64| crate::local_string(NOW + offset, &paris).unwrap();
+    let marie = || Some(json!({ "id": MARIE_ID, "name": MARIE }));
+    let recent = document(3001, &at(-10 * 86_400), 1_795_000_000_000, marie(), false);
+    let soon = document(3002, &at(5 * 86_400), 1_795_000_000_000, marie(), false);
+    let tomorrow = document(3003, &at(86_400), 1_795_000_000_000, marie(), false);
+    let mut documents = recorded_documents();
+    documents.extend(past(1000, 120, 0));
+    documents.extend([recent, soon, tomorrow]);
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    let mut calendar: BTreeMap<String, i64> = BTreeMap::new();
+
+    let (first, _, _) = refresh_at(&mut host, NOW);
+    assert!(door(&mut calendar, &first).is_empty());
+    let held_past: Vec<String> = calendar.iter().filter(|(_, start)| **start < NOW).map(|(uid, _)| uid.clone()).collect();
+    assert!(held_past.len() >= 120 + 1 && calendar.contains_key(&v(3001)) && calendar.contains_key(&v(3002)) && calendar.contains_key(&v(3003)));
+
+    // Planity loses the two years, ten days ago and in five days.
+    let lost = |host: &mut StandIn, keep_tomorrow: bool| {
+        let mut documents = recorded_documents();
+        if keep_tomorrow {
+            documents.push(document(3003, &at(86_400), 1_795_000_000_000, marie(), false));
+        }
+        host.web = Box::new(web(Scenario { documents, ..Scenario::default() }));
+    };
+    lost(&mut host, true);
+    let (window, _, _) = refresh_at(&mut host, NOW + 3 * 3600);
+    assert_eq!(door(&mut calendar, &window), vec![v(3002)], "the one to come alone");
+    // Two days on, tomorrow's is past; then Planity loses it too, and a week on the whole past is read again.
+    let (_, _, _) = refresh_at(&mut host, NOW + 2 * 86_400);
+    lost(&mut host, false);
+    for later in [2 * 86_400 + 3 * 3600, 8 * 86_400] {
+        let (reply, _, _) = refresh_at(&mut host, NOW + later);
+        let removed = door(&mut calendar, &reply);
+        assert!(removed.is_empty(), "nothing of the past removed: {removed:?}");
+        assert!(instant(reply["agendas"][0]["period"]["from"].as_str().unwrap()) >= NOW + later, "the period never reaches back");
+    }
+    for uid in held_past.iter().chain([&v(3001), &v(3003)]) {
+        assert!(calendar.contains_key(uid), "{uid} stays");
+    }
+    // The feed failing: no period, nothing removed at all.
+    host.web = Box::new(web(Scenario { documents: Vec::new(), feed: (500, String::new()), ..Scenario::default() }));
+    let (reply, _, _) = refresh_at(&mut host, NOW + 9 * 86_400);
+    assert_eq!(reply["agendas"][0].get("period"), None);
+}
+
+/// After a sign-in, the refreshes of the hour read the whole past again
+/// (the first comes before a calendar is chosen, and Sioul writes nothing
+/// until then), and the next one too; then the window alone.
+#[test]
+fn the_refreshes_of_the_hour_after_a_sign_in_read_the_whole_past() {
+    let mut host = stand_in(Scenario::default());
+    assert_eq!(sign_in(&mut host, &link()), json!({ "signed_in": true }));
+    for (later, whole) in [(60, true), (600, true), (3 * 3600, true), (6 * 3600, false), (9 * 3600, false)] {
+        let (reply, _, from) = refresh_at(&mut host, NOW + later);
+        assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
+        assert_eq!(from.starts_with("2024-"), whole, "{later} s after the sign-in: {from}");
+    }
+    let kept = kept(&host);
+    assert_eq!((kept["s"].clone(), kept["h"].clone()), (json!(NOW), json!(NOW + 3 * 3600)));
+    assert!(host.secret.as_deref().unwrap().len() <= 2400);
+}
+
+/// A long past (4,000 appointments in two years) comes in pieces, one a
+/// refresh: each of 1,500 documents or a little more, ending with a whole
+/// day, the next beginning with the next day; each reply within every
+/// bound; the device notes where it got to, then that the whole past is
+/// read; the door holds every appointment once the last piece came; then
+/// the window alone until a week has passed.
+#[test]
+fn a_long_past_comes_in_pieces_of_whole_days_one_a_refresh() {
+    let mut documents = recorded_documents();
+    documents.extend(past(1000, 4000, 0));
+    let day_of: BTreeMap<String, String> = documents.iter().map(|d| (doc_name(d).rsplit('/').next().unwrap().to_string(), doc_s(d)[..10].to_string())).collect();
+    let of_the_past: BTreeSet<String> = (1000..5000).map(v).collect();
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    let mut calendar: BTreeMap<String, i64> = BTreeMap::new();
+    let mut seen_days: BTreeMap<String, usize> = BTreeMap::new();
+    let mut resumes: Vec<String> = Vec::new();
+    for (round, later) in [0, 3 * 3600, 6 * 3600].into_iter().enumerate() {
+        let (reply, requests, from) = refresh_at(&mut host, NOW + later);
+        assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
+        within_every_bound(&reply, requests);
+        let first = crate::local_string(NOW + later - 730 * 86_400, &jiff::tz::db().get("Europe/Paris").unwrap()).unwrap();
+        assert_eq!(from, resumes.last().cloned().unwrap_or(first), "each piece begins where the last ended");
+        door(&mut calendar, &reply);
+        let past_here: Vec<String> = vevents(&unfolded(&reply["agendas"][0])).into_iter().map(|(uid, _)| uid).filter(|uid| of_the_past.contains(uid)).collect();
+        assert!(past_here.len() >= 900 && (round == 2 || past_here.len() >= 1500), "round {round}: {}", past_here.len());
+        for uid in &past_here {
+            *seen_days.entry(day_of[uid].clone()).or_default() += 1;
+        }
+        let kept = kept(&host);
+        if round < 2 {
+            let resume = kept["p"].as_str().unwrap().to_string();
+            assert!(resume.ends_with(" 00:00") && resumes.last().is_none_or(|r| *r < resume), "{resume}");
+            // The piece ended with a whole day: nothing of the next day in it.
+            assert!(past_here.iter().all(|uid| day_of[uid].as_str() < &resume[..10]));
+            assert_eq!(kept.get("h"), None, "not yet the whole past");
+            resumes.push(resume);
+        } else {
+            assert_eq!((kept.get("p"), kept["h"].clone()), (None, json!(NOW + later)), "the whole past read");
+        }
+    }
+    // Every appointment of the two years came once, each day in one piece.
+    assert!(of_the_past.iter().all(|uid| calendar.contains_key(uid)), "the door holds the whole past");
+    let per_day: BTreeMap<String, usize> = of_the_past.iter().map(|uid| day_of[uid].clone()).fold(BTreeMap::new(), |mut m, d| {
+        *m.entry(d).or_default() += 1;
+        m
+    });
+    assert_eq!(seen_days, per_day, "each day whole, in one piece");
+    // Then the window alone.
+    let (_, requests, from) = refresh_at(&mut host, NOW + 9 * 3600);
+    assert!(from.starts_with("2026-09") && requests == 3, "{from} {requests}");
+}
+
+/// A past whose events would weigh more than a reply holds: the oldest
+/// appointments of the past are left out, the newest kept, every one of the
+/// window kept, the reply within every bound, and the log says how many.
+#[test]
+fn a_heavy_past_stays_within_sioul_s_bounds_its_oldest_left_out() {
+    let mut documents = recorded_documents();
+    documents.extend(past(1000, 1400, 5200));
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    let window: Vec<String> = {
+        let mut host = stand_in(Scenario::default());
+        signed_in(&mut host);
+        vevents(&unfolded(&refresh(&mut host, "en")["agendas"][0])).into_iter().map(|(uid, _)| uid).collect()
+    };
+    let (reply, requests, _) = refresh_at(&mut host, NOW);
+    assert_eq!(reply["problem"], Value::Null, "{:?}", host.log);
+    within_every_bound(&reply, requests);
+    assert!(reply.to_string().len() <= 7 << 20, "within the extension's own margin");
+    let uids: BTreeSet<String> = vevents(&unfolded(&reply["agendas"][0])).into_iter().map(|(uid, _)| uid).collect();
+    for uid in &window {
+        assert!(uids.contains(uid), "the window's {uid} kept");
+    }
+    assert!(uids.contains(&v(1000 + 1399)), "the newest of the past kept");
+    assert!(!uids.contains(&v(1000)), "the oldest left out");
+    let kept_past = (0..1400).filter(|i| uids.contains(&v(1000 + i))).count();
+    assert!(kept_past > 700 && kept_past < 1400, "{kept_past}");
+    // What is kept of the past is its newest part, without a hole.
+    let first_kept = (0..1400).position(|i| uids.contains(&v(1000 + i))).unwrap();
+    assert_eq!(kept_past, 1400 - first_kept);
+    assert!(host.log.iter().any(|l| l.contains(&format!("{first_kept} of the oldest appointment(s) of the past left out"))), "{:?}", host.log);
+}
+
+/// On a whole read, the feed's series give their occurrences of the past
+/// too, each range its own bound: a daily series begun two and a half years
+/// ago gives its 400 oldest of the two years (cut, said in the log) and,
+/// whatever the past, every one of the window that a window read gives.
+#[test]
+fn a_series_gives_its_past_on_a_whole_read_without_crowding_the_window() {
+    let series = "BEGIN:VEVENT\r\nUID:-Vinvented0000004000\r\nDTSTAMP:20240601T080000Z\r\nDTSTART;TZID=Europe/Paris:20240601T120000\r\nDTEND;TZID=Europe/Paris:20240601T130000\r\nSUMMARY:Institut Exemple - Pause\r\nRRULE:FREQ=DAILY\r\nX-PLANITY-CALENDAR-ID:-Cinvented0000000000\r\nX-PLANITY-DATA:{\"sq\":\"-Vinvented0000004000\",\"id\":\"-Vinvented0000004000\",\"ca\":\"-Cinvented0000000000\",\"uat\":1717200000000}\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    let feed = recorded("feed.ics").replace("END:VCALENDAR", series);
+    let occurrences = |reply: &Value| -> BTreeSet<String> { vevents(&unfolded(&reply["agendas"][0])).into_iter().map(|(uid, _)| uid).filter(|uid| uid.starts_with(&v(4000))).collect() };
+    let window = {
+        let mut host = stand_in(Scenario { feed: (200, feed.clone()), ..Scenario::default() });
+        signed_in(&mut host);
+        occurrences(&refresh(&mut host, "en"))
+    };
+    let mut host = stand_in(Scenario { feed: (200, feed), ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    let (reply, requests, _) = refresh_at(&mut host, NOW);
+    within_every_bound(&reply, requests);
+    let whole = occurrences(&reply);
+    assert!(window.len() > 170 && window.contains(&format!("{}-20270321", v(4000))), "{}", window.len());
+    assert!(window.is_subset(&whole), "every occurrence of the window kept on a whole read");
+    assert_eq!(whole.len() - window.len(), 400, "the past's own bound");
+    assert!(whole.contains(&format!("{}-20241123", v(4000))) && !whole.contains(&format!("{}-20240601", v(4000))), "from two years back, nothing older");
+    assert!(host.log.iter().any(|l| l.contains("a series was cut at 400")), "{:?}", host.log);
+}
+
+/// A salon whose window alone holds more than a refresh may read beside
+/// it: no piece of the past, nothing noted, the window within every bound.
+#[test]
+fn a_window_that_fills_a_refresh_reads_no_piece_of_the_past() {
+    let paris = jiff::tz::db().get("Europe/Paris").unwrap();
+    let mut documents = recorded_documents();
+    documents.extend(past(1000, 200, 0));
+    documents.extend((0..2200u32).map(|i| document(6000 + i, &crate::local_string(NOW - 50 * 86_400 + i64::from(i) * 3000, &paris).unwrap(), 1_790_000_000_000, None, false)));
+    let mut host = stand_in(Scenario { documents, ..Scenario::default() });
+    host.secret = Some(json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }).to_string());
+    let (reply, requests, from) = refresh_at(&mut host, NOW);
+    within_every_bound(&reply, requests);
+    assert!(from.starts_with("2026-09"), "the window alone: {from}");
+    assert!(host.log.iter().any(|l| l.contains("fill this refresh")), "{:?}", host.log);
+    assert_eq!(kept(&host), json!({ "r": REFRESH_B, "b": BUSINESS, "l": link() }), "nothing noted: the past still due");
+    assert!(!unfolded(&reply["agendas"][0]).contains(&format!("UID:{}\r\n", v(1000))));
 }

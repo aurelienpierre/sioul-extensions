@@ -25,13 +25,17 @@
 //!   ties to their card.
 
 use crate::feed::{self, Expansion, Feed, FeedEvent};
-use crate::planityapi::Document;
-use serde_json::Value;
+use crate::planityapi::{Document, Typed};
 use sioul_extension::ical::{self, Event, PersonRef};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A whole day of minutes (an all-day block is `d` ≈ 1439).
 const DAY_MINUTES: i64 = 1440;
+/// The most occurrences of the past the series give in one reply, all
+/// series together, the newest kept: each costs Sioul's interpreter as much
+/// as a booking (`PIECE` in `lib.rs`), and a daily series of two years would
+/// give hundreds.
+pub const SERIES_PAST_MOST: usize = 1_000;
 
 /// A `vevents` document, read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -62,17 +66,18 @@ pub struct Appointment {
     pub updated: Option<i64>,
 }
 
-fn field_text(fields: &Value, name: &str) -> Option<String> {
-    fields.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+/// A field's text, trimmed, when it holds some.
+fn field_text(field: &Option<Typed>) -> Option<String> {
+    field.as_ref().and_then(Typed::text).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
 impl Appointment {
     /// A document as an appointment; none when its start does not read.
     pub fn read(document: &Document, zone: &jiff::tz::TimeZone) -> Option<Self> {
         let fields = &document.fields;
-        let start_text = fields.get("s").and_then(Value::as_str)?;
-        let minutes = fields.get("d").and_then(Value::as_i64).unwrap_or(0).max(0);
-        let all_day = fields.get("ad").and_then(Value::as_bool).unwrap_or(false);
+        let start_text = fields.s.as_ref().and_then(Typed::text)?;
+        let minutes = fields.d.as_ref().and_then(Typed::integer).unwrap_or(0).max(0);
+        let all_day = fields.ad.as_ref().and_then(Typed::boolean).unwrap_or(false);
         let (start, end) = if all_day {
             let (year, month, day) = crate::parse_date(start_text)?;
             let first = ical::days(year, month, day) * 86_400;
@@ -82,25 +87,24 @@ impl Appointment {
             let start = crate::parse_local(start_text, zone)?;
             (start, start + minutes * 60)
         };
-        let client = fields.get("cu").filter(|cu| cu.is_object());
-        let client_text = |name: &str| client.and_then(|cu| field_text(cu, name));
+        let client = fields.cu.as_ref().and_then(Typed::client);
         Some(Self {
             id: document.id.clone(),
-            key: field_text(fields, "sq").unwrap_or_else(|| document.id.clone()),
-            calendar: field_text(fields, "ca").or_else(|| field_text(fields, "sca")),
+            key: field_text(&fields.sq).unwrap_or_else(|| document.id.clone()),
+            calendar: field_text(&fields.ca).or_else(|| field_text(&fields.sca)),
             start,
             end,
             minutes,
             all_day,
-            cancelled: fields.get("dat").is_some_and(|value| !value.is_null()),
-            client_id: client_text("id"),
-            client_name: client_text("name"),
-            phone: client_text("phone"),
-            email: client_text("email"),
-            note: field_text(fields, "t"),
-            service: field_text(fields, "se"),
-            price: fields.get("p").and_then(Value::as_i64),
-            updated: fields.get("uat").and_then(feed::millis),
+            cancelled: fields.dat.as_ref().is_some_and(Typed::present),
+            client_id: client.and_then(|cu| field_text(&cu.id)),
+            client_name: client.and_then(|cu| field_text(&cu.name)),
+            phone: client.and_then(|cu| field_text(&cu.phone)),
+            email: client.and_then(|cu| field_text(&cu.email)),
+            note: field_text(&fields.t),
+            service: field_text(&fields.se),
+            price: fields.p.as_ref().and_then(Typed::integer),
+            updated: fields.uat.as_ref().map(Typed::plain).as_ref().and_then(feed::millis),
         })
     }
 }
@@ -234,9 +238,13 @@ impl FeedBooking<'_> {
 
 /// The merge. `feed` is none when it was not read; `window` the read
 /// window, which the feed's bookings are clipped to (Firestore's come from
-/// it already); `calendar` the feed's own calendar id (the link's), for a
-/// feed event that names none.
-pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i64), calendar: Option<&str>, french: bool) -> Merged {
+/// it already); `past`, the dates of the past this refresh read (a piece of
+/// it, from its first instant to the instant after it): the feed's series
+/// then give their occurrences of those dates too, expanded apart from the
+/// window's so that a long past never takes a series' bound from the
+/// window, [`SERIES_PAST_MOST`] at most together; `calendar` the feed's own
+/// calendar id (the link's), for a feed event that names none.
+pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i64), past: Option<(i64, i64)>, calendar: Option<&str>, french: bool) -> Merged {
     let mut merged = Merged::default();
     let calname = feed.and_then(|f| f.name.as_deref());
     let events: &[FeedEvent] = feed.map(|f| f.events.as_slice()).unwrap_or(&[]);
@@ -290,6 +298,8 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
     let mut bookings: Vec<Booking> = Vec::new();
     let (mut joined_count, mut feed_only_count, mut firestore_wins) = (0usize, 0usize, 0usize);
     let (from, until) = window;
+    let past = past.map(|(first, end)| (first, end.min(from))).filter(|(first, end)| first < end);
+    let lowest = past.map_or(from, |(first, _)| first);
     for (key, fb) in &one_offs {
         let joined = join(fb.events.iter().flat_map(|e| e.appointment_ids.iter().map(String::as_str).chain([e.uid.as_str()])), key, &by_id, &by_key, &mut used, appointments);
         if joined.is_empty() {
@@ -316,7 +326,7 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
             let (start, end, all_day) = feed_times(fb.first().local.day, fb.start(), fb.end(), fb.events.iter().all(|e| e.all_day), &considered);
             Booking { start, end, all_day, cancelled: fb.events.iter().all(|e| e.cancelled), ..Booking::default() }
         };
-        if !(from..=until).contains(&booking.start) {
+        if !(lowest..=until).contains(&booking.start) {
             continue;
         }
         booking.uid = key.clone();
@@ -325,6 +335,8 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
     }
 
     let mut cancelled_series = 0usize;
+    // The series' occurrences before the window (the whole past read), bounded together below.
+    let mut before_window: Vec<Booking> = Vec::new();
     for event in &series {
         let fb = FeedBooking { events: vec![event] };
         // The documents of a series are its own, whatever becomes of it.
@@ -337,18 +349,29 @@ pub fn merge(feed: Option<&Feed>, appointments: &[Appointment], window: (i64, i6
         }
         let considered = considered(&joined);
         let (occurrences, expansion) = feed::expand(event, from, until);
-        match &expansion {
-            Expansion::Whole => {}
-            Expansion::Cut => merged.log.push(format!("a series was cut at {} occurrences", feed::MAX_OCCURRENCES)),
-            Expansion::FirstOnly(part) => merged.log.push(format!("a series' rule part does not read ({part}): its first occurrence only")),
+        let mut notes = vec![expansion];
+        // The whole past read: the series' occurrences before the window too, each range its own bound.
+        let (before, note) = past.map(|(first, end)| feed::expand(event, first, end - 1)).unwrap_or((Vec::new(), Expansion::Whole));
+        notes.push(note);
+        if notes.contains(&Expansion::Cut) {
+            merged.log.push(format!("a series was cut at {} occurrences", feed::MAX_OCCURRENCES));
         }
-        for occurrence in occurrences {
+        if let Some(Expansion::FirstOnly(part)) = notes.iter().find(|n| matches!(n, Expansion::FirstOnly(_))) {
+            merged.log.push(format!("a series' rule part does not read ({part}): its first occurrence only"));
+        }
+        for (occurrence, of_the_past) in before.into_iter().map(|o| (o, true)).chain(occurrences.into_iter().map(|o| (o, false))) {
             let (start, end, all_day) = feed_times(occurrence.day, occurrence.start, occurrence.end, event.all_day, &considered);
             let mut booking = Booking { uid: format!("{}-{}", event.key, ical::date_stamp(occurrence.day)), start, end, all_day, cancelled: event.cancelled, ..Booking::default() };
             fill(&mut booking, &fb, &joined, &considered, &services, &clients, calname, calendar);
-            bookings.push(booking);
+            if of_the_past { before_window.push(booking) } else { bookings.push(booking) }
         }
     }
+    if before_window.len() > SERIES_PAST_MOST {
+        merged.log.push(format!("{} of the oldest occurrences of the past of the series left out, {SERIES_PAST_MOST} kept", before_window.len() - SERIES_PAST_MOST));
+        before_window.sort_by(|a, b| (b.start, &b.uid).cmp(&(a.start, &a.uid)));
+        before_window.truncate(SERIES_PAST_MOST);
+    }
+    bookings.extend(before_window);
 
     // What the feed did not take: one booking per key, from Firestore alone.
     let mut rest: Vec<(&str, Vec<&Appointment>)> = Vec::new();

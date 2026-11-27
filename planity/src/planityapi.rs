@@ -13,7 +13,9 @@
 //! of a community client is: it is a constant in `lib.rs`.
 
 use crate::{API_KEY, Fault};
-use serde_json::{Map, Value, json};
+use serde::Deserialize;
+use serde::de::IgnoredAny;
+use serde_json::{Value, json};
 use sioul_extension::{Answer, Host, Request, url};
 
 const IDENTITY: &str = "https://identitytoolkit.googleapis.com/v1";
@@ -22,10 +24,15 @@ const SECURETOKEN: &str = "https://securetoken.googleapis.com/v1/token";
 /// The Firestore REST documents root of the salon's project.
 const FIRESTORE: &str = "https://firestore.googleapis.com/v1/projects/planity-production/databases/(default)/documents";
 
-/// Firestore's page size, and the most pages a window reads before it is a
-/// problem (300 × 400 ≈ 120 000 appointments, far past any salon's window).
+/// Firestore's page size (300 documents weigh about 400 KB, measured on a
+/// salon's window on 27 November 2026, far under the 4 MiB Sioul lets an
+/// answer weigh).
 const LIMIT: i64 = 300;
-const MAX_PAGES: usize = 400;
+/// The most pages a read may take. Sioul gives a call 100 web requests
+/// (docs/extensions.md, "Limits of a call"): a refresh asks one renewal,
+/// a piece of the past, the window and the feed, 1 + 8 + 50 + 1.
+pub const PIECE_PAGES: usize = 8;
+pub const WINDOW_PAGES: usize = 50;
 
 // ---------------------------------------------------------------- each step, named
 
@@ -215,26 +222,180 @@ pub fn mint(host: &mut dyn Host, refresh: &str) -> Result<(String, Option<String
 // ---------------------------------------------------------------- the appointments
 
 /// One `vevents` document: its own id (the last path segment, a stable UID),
-/// its full resource name (for the pagination cursor), and its fields
-/// flattened to plain JSON ([`plain_fields`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// its full resource name (for the pagination cursor), and the fields the
+/// extension reads ([`Fields`]).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Document {
     pub id: String,
     pub name: String,
-    pub fields: Value,
+    pub fields: Fields,
+}
+
+/// A Firestore typed value (Firestore REST `Value`), read straight into its
+/// kind: a string, an integer (a decimal string), a double, a boolean, a
+/// timestamp, a map of a client's fields; an array is only seen to be there;
+/// a null, or a kind the extension does not read (a reference, bytes, a
+/// point), is no value. Every other key of an answer is skipped as it is
+/// read, never kept: a document holds many fields the extension does not
+/// use, and a page of a whole past holds three hundred documents (read in
+/// Sioul's interpreter, a tree of every value cost a million steps a
+/// document, 27 November 2026).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Typed {
+    pub string_value: Option<String>,
+    pub integer_value: Option<Value>,
+    pub double_value: Option<Value>,
+    pub boolean_value: Option<bool>,
+    pub timestamp_value: Option<String>,
+    pub map_value: Option<Box<TypedMap>>,
+    /// An array, seen to be there, its items skipped.
+    #[serde(deserialize_with = "seen")]
+    pub array_value: Option<()>,
+}
+
+/// A value seen to be there, whatever it holds, skipped as it is read.
+fn seen<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<()>, D::Error> {
+    <IgnoredAny as serde::Deserialize>::deserialize(deserializer).map(|_| Some(()))
+}
+
+/// A map's fields, as a client's are read (`cu`: `id`, `name`, `phone`, `email`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct TypedMap {
+    pub fields: ClientFields,
+}
+
+/// The fields of a client (`cu`); a block's `{d: true}` holds none of them.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct ClientFields {
+    pub id: Option<Typed>,
+    pub name: Option<Typed>,
+    pub phone: Option<Typed>,
+    pub email: Option<Typed>,
+}
+
+/// The fields of a `vevents` document the extension reads (`api.md`): its
+/// start, minutes, all-day mark, client, booking key, calendars, cancelled
+/// mark, note, service, price, update time.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Fields {
+    pub s: Option<Typed>,
+    pub d: Option<Typed>,
+    pub ad: Option<Typed>,
+    pub cu: Option<Typed>,
+    pub sq: Option<Typed>,
+    pub ca: Option<Typed>,
+    pub sca: Option<Typed>,
+    pub dat: Option<Typed>,
+    pub t: Option<Typed>,
+    pub se: Option<Typed>,
+    pub p: Option<Typed>,
+    pub uat: Option<Typed>,
+}
+
+impl Typed {
+    /// Its text: a string's, or a timestamp's as written.
+    pub fn text(&self) -> Option<&str> {
+        self.string_value.as_deref().or(self.timestamp_value.as_deref())
+    }
+
+    /// Its integer: an integer's (a decimal string, or a number), or a double that is a whole number written as one.
+    pub fn integer(&self) -> Option<i64> {
+        match &self.integer_value {
+            Some(Value::String(text)) => text.parse().ok(),
+            Some(number) => number.as_i64(),
+            None => self.double_value.as_ref().and_then(Value::as_i64),
+        }
+    }
+
+    pub fn boolean(&self) -> Option<bool> {
+        self.boolean_value
+    }
+
+    /// Whether it holds a value of any kind it reads (a null, none).
+    pub fn present(&self) -> bool {
+        self.string_value.is_some() || self.integer_value.is_some() || self.double_value.is_some() || self.boolean_value.is_some() || self.timestamp_value.is_some() || self.map_value.is_some() || self.array_value.is_some()
+    }
+
+    /// Its scalar as plain JSON: an integer as a number (its decimal string
+    /// when it does not parse), a double, a boolean, a string or a
+    /// timestamp's text; anything else null.
+    pub fn plain(&self) -> Value {
+        if let Some(text) = &self.string_value {
+            return Value::String(text.clone());
+        }
+        if let Some(integer) = &self.integer_value {
+            return match integer {
+                Value::String(text) => text.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::String(text.clone())),
+                other => other.clone(),
+            };
+        }
+        if let Some(double) = &self.double_value {
+            return double.clone();
+        }
+        if let Some(boolean) = self.boolean_value {
+            return Value::Bool(boolean);
+        }
+        self.timestamp_value.clone().map(Value::String).unwrap_or(Value::Null)
+    }
+
+    /// A map's client fields, when it is a map.
+    pub fn client(&self) -> Option<&ClientFields> {
+        self.map_value.as_deref().map(|map| &map.fields)
+    }
+}
+
+/// An element of a `:runQuery` page: a document, or a read-time marker (none).
+#[derive(Deserialize)]
+struct Element {
+    #[serde(default)]
+    document: Option<RawDocument>,
+}
+
+#[derive(Deserialize)]
+struct RawDocument {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    fields: Fields,
+}
+
+/// What a read of the appointment documents gave: each document as the
+/// reader's `take` made it (none: left out), how many documents were read,
+/// whether the read reached `until` (`complete`), and when it stopped short,
+/// the local day the next read begins at (`resume`, `"YYYY-MM-DD 00:00"`):
+/// the day of the first document not read.
+#[derive(Debug)]
+pub struct Read<T> {
+    pub items: Vec<T>,
+    pub documents: usize,
+    pub complete: bool,
+    pub resume: Option<String>,
 }
 
 /// The salon's appointments from `from` to `until` (local wall-clock strings
-/// `"YYYY-MM-DD HH:MM"`), read over Firestore REST `:runQuery`, paginated.
-/// Only `s >= from` is filtered server-side (one range field, so no composite
-/// index is needed); ordered ascending by `s` then the document name, the
-/// read stops at the first document past `until`.
-pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &str, until: &str) -> Result<Vec<Document>, Fault> {
+/// `"YYYY-MM-DD HH:MM"`), read over Firestore REST `:runQuery`, paginated,
+/// `most_pages` pages at most. Only `s >= from` is filtered server-side (one
+/// range field, so no composite index is needed); ordered ascending by `s`
+/// then the document name, the read stops at the first document past
+/// `until`. A `piece` of the past stops sooner: once it holds that many
+/// documents, at the first document of another day, so that it holds whole
+/// days and the next piece begins with that day (`Read::resume`); past its
+/// pages too, at the day of the last document read. Each document goes
+/// through `take` as soon as its page is read, so that only what the reader
+/// keeps of it stays in memory.
+#[allow(clippy::too_many_arguments)]
+pub fn read_vevents<T>(host: &mut dyn Host, business: &str, id_token: &str, from: &str, until: &str, most_pages: usize, piece: Option<usize>, mut take: impl FnMut(Document) -> Option<T>) -> Result<Read<T>, Fault> {
     let url_query = format!("{FIRESTORE}/businesses/{business}:runQuery");
     let authorization = format!("Bearer {id_token}");
-    let mut out = Vec::new();
+    let mut out = Read { items: Vec::new(), documents: 0, complete: true, resume: None };
     let mut cursor: Option<(String, String)> = None;
-    for _ in 0..MAX_PAGES {
+    // The local day of the last document read, `"YYYY-MM-DD"`.
+    let mut day: Option<String> = None;
+    for _ in 0..most_pages {
         let body = query_body(from, cursor.as_ref());
         let answer = ask(host, FIRESTORE_STEP, &Request::post_json(&url_query, &body).header("Authorization", &authorization).header("Accept", "application/json"))?;
         match answer.status {
@@ -242,24 +403,39 @@ pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &
             // UNAUTHENTICATED (the token refused), PERMISSION_DENIED (the business not readable)…: named.
             _ => return Err(answered(FIRESTORE_STEP, &answer, false)),
         }
-        let page = answer.json().ok_or_else(|| Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not JSON")))?;
-        let elements = page.as_array().ok_or_else(|| Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not a list of documents")))?;
+        // Read straight into the fields the extension uses, every other key skipped (`Typed`).
+        let elements: Vec<Element> = serde_json::from_str(&answer.body).map_err(|_| match serde_json::from_str::<IgnoredAny>(&answer.body) {
+            Ok(_) => Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not a list of documents")),
+            Err(_) => Fault::Changed(format!("{FIRESTORE_STEP} answered HTTP 200 with what is not JSON")),
+        })?;
+        drop(answer);
         let mut documents = 0;
         let mut last: Option<(String, String)> = None;
         for element in elements {
             // A page element is either a {document} or a read-time marker; skip the marker.
-            let Some(document) = element.get("document") else { continue };
+            let Some(RawDocument { name, fields }) = element.document else { continue };
             documents += 1;
-            let name = document.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            let fields = plain_fields(document.get("fields"));
-            let start = fields.get("s").and_then(Value::as_str).unwrap_or("").to_string();
+            let start = fields.s.as_ref().and_then(Typed::text).unwrap_or("").to_string();
             last = Some((start.clone(), name.clone()));
             // Ascending by `s`: the first past `until` ends the read.
             if start.as_str() > until {
                 return Ok(out);
             }
+            // A piece full: it ends with the day before this document's.
+            let this_day = start.get(..10).filter(|d| d.len() == 10 && d.as_bytes()[4] == b'-');
+            if piece.is_some_and(|most| out.documents >= most) && this_day.is_some() && day.as_deref().is_some_and(|before| Some(before) != this_day) {
+                out.complete = false;
+                out.resume = this_day.map(|d| format!("{d} 00:00"));
+                return Ok(out);
+            }
+            if let Some(this_day) = this_day {
+                day = Some(this_day.to_string());
+            }
             let id = name.rsplit('/').next().unwrap_or("").to_string();
-            out.push(Document { id, name, fields });
+            out.documents += 1;
+            if let Some(item) = take(Document { id, name, fields }) {
+                out.items.push(item);
+            }
         }
         // A page shorter than the limit (or with no document) is the last.
         if documents < usize::try_from(LIMIT).unwrap_or(usize::MAX) {
@@ -270,7 +446,9 @@ pub fn read_vevents(host: &mut dyn Host, business: &str, id_token: &str, from: &
             None => return Ok(out),
         }
     }
-    Err(Fault::Changed(format!("{FIRESTORE_STEP}: more than {MAX_PAGES} pages of appointments")))
+    out.complete = false;
+    out.resume = day.map(|d| format!("{d} 00:00"));
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- the official feed
@@ -349,53 +527,6 @@ fn query_body(from: &str, after: Option<&(String, String)>) -> Value {
     query
 }
 
-/// A Firestore document's `fields` map flattened to plain JSON.
-fn plain_fields(fields: Option<&Value>) -> Value {
-    let mut out = Map::new();
-    if let Some(object) = fields.and_then(Value::as_object) {
-        for (name, value) in object {
-            out.insert(name.clone(), plain(value));
-        }
-    }
-    Value::Object(out)
-}
-
-/// A Firestore typed value flattened to plain JSON (Firestore REST `Value`):
-/// a string as a string, an integer (a decimal string) as a number, a double
-/// as it is, a boolean, a null, a timestamp as its string, a map as an object
-/// of its flattened fields, an array as a list; anything else null.
-pub fn plain(value: &Value) -> Value {
-    if let Some(string) = value.get("stringValue").and_then(Value::as_str) {
-        return Value::String(string.to_string());
-    }
-    if let Some(integer) = value.get("integerValue") {
-        if let Some(text) = integer.as_str() {
-            return text.parse::<i64>().map(Value::from).unwrap_or(Value::String(text.to_string()));
-        }
-        return integer.clone();
-    }
-    if let Some(double) = value.get("doubleValue") {
-        return double.clone();
-    }
-    if let Some(boolean) = value.get("booleanValue") {
-        return boolean.clone();
-    }
-    if value.get("nullValue").is_some() {
-        return Value::Null;
-    }
-    if let Some(timestamp) = value.get("timestampValue") {
-        return timestamp.clone();
-    }
-    if let Some(map) = value.get("mapValue") {
-        return plain_fields(map.get("fields"));
-    }
-    if let Some(array) = value.get("arrayValue") {
-        let items = array.get("values").and_then(Value::as_array).map(|all| all.iter().map(plain).collect()).unwrap_or_default();
-        return Value::Array(items);
-    }
-    Value::Null
-}
-
 /// A string field's value, non-empty.
 fn non_empty(body: &Value, field: &str) -> Option<String> {
     body.get(field).and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string)
@@ -434,22 +565,43 @@ mod tests {
     }
 
     #[test]
-    fn firestore_values_flatten() {
-        let fields = json!({
-            "s": { "stringValue": "2026-11-20 14:00" },
-            "d": { "integerValue": "30" },
-            "p": { "integerValue": "4500" },
-            "ad": { "booleanValue": true },
-            "cu": { "mapValue": { "fields": { "id": { "stringValue": "C1" }, "name": { "stringValue": "Marie Exemple" } } } },
-            "dat": { "timestampValue": "2026-11-18T10:00:00Z" }
-        });
-        let flat = plain_fields(Some(&fields));
-        assert_eq!(flat["s"], "2026-11-20 14:00");
-        assert_eq!(flat["d"], 30);
-        assert_eq!(flat["p"], 4500);
-        assert_eq!(flat["ad"], true);
-        assert_eq!(flat["cu"]["name"], "Marie Exemple");
-        assert_eq!(flat["dat"], "2026-11-18T10:00:00Z");
+    fn firestore_values_read_into_their_kinds() {
+        let page = json!([
+            { "readTime": "2026-11-22T10:00:00Z" },
+            { "document": { "name": "projects/p/databases/(default)/documents/businesses/-B/vevents/-V1", "fields": {
+                "s": { "stringValue": "2026-11-20 14:00" },
+                "d": { "integerValue": "30" },
+                "p": { "integerValue": 4500 },
+                "ad": { "booleanValue": true },
+                "cu": { "mapValue": { "fields": { "id": { "stringValue": "C1" }, "name": { "stringValue": "Marie Exemple" }, "tags": { "arrayValue": { "values": [{ "stringValue": "x" }] } } } } },
+                "dat": { "timestampValue": "2026-11-18T10:00:00Z" },
+                "uat": { "integerValue": "1795000000000" },
+                "t": { "nullValue": null },
+                "sq": { "arrayValue": {} },
+                "unread": { "mapValue": { "fields": { "deep": { "mapValue": {} } } } },
+                "se": { "referenceValue": "projects/p/databases/(default)/documents/x" }
+            }, "createTime": "2026-11-20T10:00:00Z" }, "readTime": "2026-11-22T10:00:00Z" }
+        ]);
+        let elements: Vec<Element> = serde_json::from_str(&page.to_string()).unwrap();
+        assert!(elements[0].document.is_none(), "a read-time marker");
+        let document = elements[1].document.as_ref().unwrap();
+        assert!(document.name.ends_with("/vevents/-V1"));
+        let f = &document.fields;
+        let get = |t: &Option<Typed>| t.clone().unwrap_or_default();
+        assert_eq!(get(&f.s).text(), Some("2026-11-20 14:00"));
+        assert_eq!((get(&f.d).integer(), get(&f.p).integer(), get(&f.ad).boolean()), (Some(30), Some(4500), Some(true)));
+        let client = get(&f.cu);
+        let client = client.client().unwrap();
+        assert_eq!((get(&client.id).text(), get(&client.name).text(), client.phone.is_none()), (Some("C1"), Some("Marie Exemple"), true));
+        assert_eq!(get(&f.dat).text(), Some("2026-11-18T10:00:00Z"));
+        assert!(get(&f.dat).present());
+        assert_eq!(get(&f.uat).plain(), json!(1_795_000_000_000_i64));
+        assert!(!get(&f.t).present(), "a null is no value");
+        assert!(get(&f.sq).present() && get(&f.sq).text().is_none(), "an array is there, and no text");
+        assert!(!get(&f.se).present(), "a reference is a kind not read");
+        assert_eq!(Typed { integer_value: Some(json!("x9")), ..Typed::default() }.plain(), json!("x9"));
+        assert_eq!(Typed { double_value: Some(json!(45)), ..Typed::default() }.integer(), Some(45));
+        assert_eq!(Typed { double_value: Some(json!(45.5)), ..Typed::default() }.integer(), None);
     }
 
     #[test]
